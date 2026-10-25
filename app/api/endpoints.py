@@ -216,6 +216,17 @@ async def register_device(
     db.add(device)
     await db.commit()
     await db.refresh(device)
+    await broadcaster.broadcast("device_created", {
+        "id": device.id,
+        "name": device.name,
+        "location": device.location,
+        "is_enabled": device.is_enabled,
+        "api_token": device.api_token,
+        "latest_report_time": None,
+        "server_last_received_at": None,
+        "created_at": device.created_at.isoformat(),
+        "updated_at": device.updated_at.isoformat(),
+    })
     return device
 
 
@@ -253,6 +264,17 @@ async def update_device(
     device.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(device)
+    await broadcaster.broadcast("device_updated", {
+        "id": device.id,
+        "name": device.name,
+        "location": device.location,
+        "is_enabled": device.is_enabled,
+        "api_token": device.api_token,
+        "latest_report_time": device.latest_report_time.isoformat() if device.latest_report_time else None,
+        "server_last_received_at": device.server_last_received_at.isoformat() if device.server_last_received_at else None,
+        "created_at": device.created_at.isoformat(),
+        "updated_at": device.updated_at.isoformat(),
+    })
     return device
 
 
@@ -271,6 +293,7 @@ async def delete_device(
 
     await db.delete(device)
     await db.commit()
+    await broadcaster.broadcast("device_deleted", {"id": device_id})
     return None
 
 
@@ -354,6 +377,18 @@ async def claim_pairing_code(
 
     pairing.is_used = True
     await db.commit()
+    await db.refresh(device)
+    await broadcaster.broadcast("device_updated", {
+        "id": device.id,
+        "name": device.name,
+        "location": device.location,
+        "is_enabled": device.is_enabled,
+        "api_token": device.api_token,
+        "latest_report_time": device.latest_report_time.isoformat() if device.latest_report_time else None,
+        "server_last_received_at": device.server_last_received_at.isoformat() if device.server_last_received_at else None,
+        "created_at": device.created_at.isoformat(),
+        "updated_at": device.updated_at.isoformat(),
+    })
 
     # Automatically save device credentials file so container or local simulator can boot immediately
     try:

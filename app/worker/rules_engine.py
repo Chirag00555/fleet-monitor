@@ -169,6 +169,13 @@ async def evaluate_device_reconnect(session: AsyncSession, device: Device, event
             "resolved_at": inc.resolved_at.isoformat()
         })
 
+    await broadcaster.broadcast("device_status", {
+        "device_id": device.id,
+        "status": "online",
+        "is_online": True,
+        "last_seen": event_time.isoformat(),
+    })
+
 
 async def run_device_silence_check(session: AsyncSession) -> int:
     now = datetime.now(timezone.utc)
@@ -219,6 +226,18 @@ async def run_device_silence_check(session: AsyncSession) -> int:
                         f"(threshold: {duration}s). Last report: {baseline_time.isoformat()}."
                     )
                     incidents_count += 1
+                    await broadcaster.broadcast("incident_updated", {
+                        "id": existing_inc.id,
+                        "rule_id": existing_inc.rule_id,
+                        "device_id": existing_inc.device_id,
+                        "status": existing_inc.status,
+                        "severity": existing_inc.severity,
+                        "title": existing_inc.title,
+                        "summary": existing_inc.summary,
+                        "event_count": existing_inc.event_count,
+                        "opened_at": existing_inc.opened_at.isoformat(),
+                        "last_event_at": existing_inc.last_event_at.isoformat(),
+                    })
                 else:
                     new_inc = Incident(
                         rule_id=rule.id,
@@ -250,6 +269,14 @@ async def run_device_silence_check(session: AsyncSession) -> int:
                         "opened_at": new_inc.opened_at.isoformat(),
                         "last_event_at": new_inc.last_event_at.isoformat(),
                     })
+
+                await broadcaster.broadcast("device_status", {
+                    "device_id": device.id,
+                    "status": "offline",
+                    "is_online": False,
+                    "silence_seconds": int(elapsed_seconds),
+                    "last_seen": baseline_time.isoformat(),
+                })
 
     await session.commit()
     return incidents_count

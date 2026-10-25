@@ -14,7 +14,19 @@ async def lifespan(app: FastAPI):
     # Ensure default operator on startup
     async with async_session_factory() as session:
         await ensure_default_operator(session)
-    yield
+    # Start integrated background worker so incidents and silence checks share SSE broadcaster
+    import asyncio
+    from app.worker.processor import run_worker_loop
+    stop_event = asyncio.Event()
+    worker_task = asyncio.create_task(run_worker_loop(poll_interval=1.0, stop_event=stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        try:
+            await asyncio.wait_for(worker_task, timeout=3.0)
+        except Exception:
+            pass
 
 app = FastAPI(
     title="Fleet Monitor Operations Platform",

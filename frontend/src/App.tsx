@@ -1,8 +1,16 @@
 ﻿import React, { useState, useEffect } from "react";
 import type { Device, TelemetryEvent, Incident, IncidentDetail, OperatorUser, PairingCode } from "./types";
 
-// const API_BASE = "http://localhost:8000/api";
-const API_BASE="http://10.2.0.134:8000/api"
+const getApiBase = () => {
+  if (typeof window !== "undefined" && window.location && window.location.hostname) {
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+      return "http://localhost:8000/api";
+    }
+    return `http://${window.location.hostname}:8000/api`;
+  }
+  return "http://localhost:8000/api";
+};
+const API_BASE = getApiBase();
 
 export const App: React.FC = () => {
   // Authentication state
@@ -31,6 +39,72 @@ export const App: React.FC = () => {
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "reconnecting" | "offline">("offline");
   const [resolutionNote, setResolutionNote] = useState<string>("");
   const [selectedDeviceFilter, setSelectedDeviceFilter] = useState<string>("all");
+  const [currentTime, setCurrentTime] = useState<number>(Date.now());
+
+  // 1-second ticker to re-evaluate real-time online/offline relative seconds without page reload
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const getDeviceOnlineInfo = (d: Device) => {
+    if (!d.is_enabled) {
+      return {
+        isOnline: false,
+        status: "disabled" as const,
+        badgeText: "INGESTION BLOCKED",
+        badgeClass: "badge-disabled",
+        dotClass: "offline-dot",
+        color: "#94a3b8",
+        subText: "Disabled by Operator",
+      };
+    }
+    if (!d.latest_report_time) {
+      return {
+        isOnline: false,
+        status: "never" as const,
+        badgeText: "AWAITING TELEMETRY",
+        badgeClass: "badge-warning",
+        dotClass: "silent-dot",
+        color: "#f59e0b",
+        subText: "Never reported",
+      };
+    }
+    const lastReportMs = new Date(d.latest_report_time).getTime();
+    const elapsedSec = Math.max(0, Math.floor((currentTime - lastReportMs) / 1000));
+
+    if (elapsedSec <= 8) {
+      return {
+        isOnline: true,
+        status: "online" as const,
+        badgeText: "ONLINE",
+        badgeClass: "badge-online",
+        dotClass: "live-dot",
+        color: "#10b981",
+        subText: `Streaming • ${elapsedSec}s ago`,
+      };
+    } else if (elapsedSec <= 20) {
+      return {
+        isOnline: false,
+        status: "silent" as const,
+        badgeText: "SILENT / STOPPING",
+        badgeClass: "badge-silent",
+        dotClass: "silent-dot",
+        color: "#f59e0b",
+        subText: `Silent for ${elapsedSec}s`,
+      };
+    } else {
+      return {
+        isOnline: false,
+        status: "offline" as const,
+        badgeText: "OFFLINE",
+        badgeClass: "badge-offline",
+        dotClass: "offline-dot",
+        color: "#ef4444",
+        subText: `Stopped • ${elapsedSec}s ago`,
+      };
+    }
+  };
 
   // Verify stored token on initial load
   useEffect(() => {
@@ -177,6 +251,64 @@ export const App: React.FC = () => {
               i.id === data.id ? { ...i, status: "resolved", resolved_at: data.resolved_at, resolution_note: data.resolution_note } : i
             )
           );
+          setSelectedIncident((prev) =>
+            prev && prev.id === data.id
+              ? { ...prev, status: "resolved", resolved_at: data.resolved_at, resolution_note: data.resolution_note }
+              : prev
+          );
+        } catch (err) {}
+      });
+
+      // Real-time device status update (online / offline / silent)
+      eventSource.addEventListener("device_status", (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setDevices((prev) =>
+            prev.map((d) => {
+              if (d.id === data.device_id) {
+                return {
+                  ...d,
+                  ...(data.last_seen ? { latest_report_time: data.last_seen } : {})
+                };
+              }
+              return d;
+            })
+          );
+        } catch (err) {}
+      });
+
+      // Real-time device updates (paired, enabled, disabled)
+      eventSource.addEventListener("device_updated", (e) => {
+        try {
+          const updatedDev: Device = JSON.parse(e.data);
+          setDevices((prev) => {
+            const exists = prev.some((d) => d.id === updatedDev.id);
+            if (exists) {
+              return prev.map((d) => (d.id === updatedDev.id ? { ...d, ...updatedDev } : d));
+            } else {
+              return [...prev, updatedDev];
+            }
+          });
+        } catch (err) {}
+      });
+
+      eventSource.addEventListener("device_created", (e) => {
+        try {
+          const newDev: Device = JSON.parse(e.data);
+          setDevices((prev) => {
+            if (prev.some((d) => d.id === newDev.id)) return prev;
+            return [...prev, newDev];
+          });
+        } catch (err) {}
+      });
+
+      eventSource.addEventListener("device_deleted", (e) => {
+        try {
+          const { id } = JSON.parse(e.data);
+          setDevices((prev) => prev.filter((d) => d.id !== id));
+          if (selectedDeviceFilter === id) {
+            setSelectedDeviceFilter("all");
+          }
         } catch (err) {}
       });
 
@@ -552,28 +684,36 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      <section className="stats-ribbon">
-        <div className="stat-card">
-          <div className="stat-label">Registered Devices</div>
-          <div className="stat-value" style={{ color: "#00d2ff" }}>{devices.length}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Active Incidents</div>
-          <div className="stat-value" style={{ color: activeIncidents.length > 0 ? "#f59e0b" : "#10b981" }}>
-            {activeIncidents.length}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Critical Alerts</div>
-          <div className="stat-value" style={{ color: criticalIncidents.length > 0 ? "#ef4444" : "#8fa0b5" }}>
-            {criticalIncidents.length}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Telemetry Events (Cached)</div>
-          <div className="stat-value" style={{ color: "#f0f4f8" }}>{events.length}</div>
-        </div>
-      </section>
+      {(() => {
+        const onlineCount = devices.filter((d) => getDeviceOnlineInfo(d).isOnline).length;
+        return (
+          <section className="stats-ribbon">
+            <div className="stat-card">
+              <div className="stat-label">Live Fleet Hardware</div>
+              <div className="stat-value" style={{ display: "flex", alignItems: "center", gap: "8px", color: onlineCount > 0 ? "#10b981" : "#ef4444" }}>
+                <span className={onlineCount > 0 ? "live-dot" : "offline-dot"}></span>
+                {onlineCount} / {devices.length} Online
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Active Incidents</div>
+              <div className="stat-value" style={{ color: activeIncidents.length > 0 ? "#f59e0b" : "#10b981" }}>
+                {activeIncidents.length}
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Critical Alerts</div>
+              <div className="stat-value" style={{ color: criticalIncidents.length > 0 ? "#ef4444" : "#8fa0b5" }}>
+                {criticalIncidents.length}
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Telemetry Ingested (SSE)</div>
+              <div className="stat-value" style={{ color: "#00d2ff" }}>{events.length}</div>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* VIEW 1: Operations Console */}
       {activeTab === "operations" && (
@@ -646,32 +786,63 @@ export const App: React.FC = () => {
                 <div style={{ color: "#8fa0b5", textAlign: "center", padding: "15px" }}>No devices registered.</div>
               ) : (
                 <div className="list-container">
-                  {devices.map((d) => (
-                    <div 
-                      key={d.id} 
-                      className="device-row" 
-                      style={{ 
-                        display: "flex", 
-                        justifyContent: "space-between", 
-                        alignItems: "center",
-                        cursor: "pointer",
-                        borderLeft: selectedDeviceFilter === d.id ? "3px solid #00d2ff" : undefined
-                      }}
-                      onClick={() => setSelectedDeviceFilter(selectedDeviceFilter === d.id ? "all" : d.id)}
-                      title="Click to filter live stream by this device"
-                    >
-                      <div>
-                        <div style={{ fontWeight: 600 }}>{d.name} <span style={{ fontSize: "11px", color: "#8fa0b5" }}>({d.id})</span></div>
-                        <div style={{ fontSize: "11px", color: "#8fa0b5" }}>{d.location || "Unknown Location"}</div>
-                      </div>
-                      <div style={{ textAlign: "right", fontSize: "11px" }}>
-                        <div style={{ color: d.latest_report_time ? "#10b981" : "#f59e0b" }}>
-                          {d.latest_report_time ? "Last: " + new Date(d.latest_report_time).toLocaleTimeString() : "Never reported"}
+                  {devices.map((d) => {
+                    const statusInfo = getDeviceOnlineInfo(d);
+                    const lastEvent = events.find((e) => e.device_id === d.id);
+                    const temp = lastEvent?.payload?.temperature;
+
+                    return (
+                      <div 
+                        key={d.id} 
+                        className="device-row" 
+                        style={{ 
+                          display: "flex", 
+                          justifyContent: "space-between", 
+                          alignItems: "center",
+                          cursor: "pointer",
+                          borderLeft: selectedDeviceFilter === d.id ? "3px solid #00d2ff" : `3px solid ${statusInfo.color}`,
+                          padding: "10px 14px",
+                          marginBottom: "8px",
+                          borderRadius: "6px",
+                          background: selectedDeviceFilter === d.id ? "rgba(0, 210, 255, 0.05)" : "var(--bg-card)",
+                          transition: "all 0.2s ease"
+                        }}
+                        onClick={() => setSelectedDeviceFilter(selectedDeviceFilter === d.id ? "all" : d.id)}
+                        title="Click to filter live stream by this device"
+                      >
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontWeight: 600 }}>{d.name}</span>
+                            <code style={{ fontSize: "11px", color: "#00d2ff", background: "#0d1117", padding: "1px 5px", borderRadius: "3px" }}>{d.id}</code>
+                          </div>
+                          <div style={{ fontSize: "11px", color: "#8fa0b5", marginTop: "2px" }}>
+                            {d.location || "Unknown Location"} &bull; {d.api_token ? "🔑 Paired" : "🔓 Open"}
+                          </div>
                         </div>
-                        <div style={{ color: "#8fa0b5" }}>{d.is_enabled ? "Enabled" : "Disabled"}</div>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          {temp !== undefined && (
+                            <div style={{ textAlign: "right", fontSize: "11px" }}>
+                              <div style={{ color: temp >= 85 ? "#ef4444" : temp >= 75 ? "#f59e0b" : "#00d2ff", fontWeight: 700 }}>
+                                {temp}°C
+                              </div>
+                              <div style={{ color: "#64748b", fontSize: "10px" }}>Telemetry</div>
+                            </div>
+                          )}
+
+                          <div style={{ textAlign: "right" }}>
+                            <div className={`badge ${statusInfo.badgeClass}`} style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                              <span className={statusInfo.dotClass}></span>
+                              {statusInfo.badgeText}
+                            </div>
+                            <div style={{ fontSize: "10px", color: statusInfo.color, marginTop: "2px" }}>
+                              {statusInfo.subText}
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -765,7 +936,9 @@ export const App: React.FC = () => {
 
             <div className="panel-body" style={{ maxHeight: "650px" }}>
               <div className="list-container">
-                {devices.map((d) => (
+                {devices.map((d) => {
+                  const statusInfo = getDeviceOnlineInfo(d);
+                  return (
                   <div
                     key={d.id}
                     className="device-row"
@@ -774,7 +947,11 @@ export const App: React.FC = () => {
                       justifyContent: "space-between",
                       alignItems: "center",
                       padding: "16px",
-                      opacity: d.is_enabled ? 1 : 0.65
+                      opacity: d.is_enabled ? 1 : 0.65,
+                      borderLeft: `4px solid ${statusInfo.color}`,
+                      marginBottom: "12px",
+                      borderRadius: "6px",
+                      background: "var(--bg-card)"
                     }}
                   >
                     <div>
@@ -783,6 +960,10 @@ export const App: React.FC = () => {
                         <code style={{ background: "#0d1117", padding: "2px 6px", borderRadius: "4px", fontSize: "12px", color: "#00d2ff" }}>
                           {d.id}
                         </code>
+                        <span className={`badge ${statusInfo.badgeClass}`} style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <span className={statusInfo.dotClass}></span>
+                          {statusInfo.badgeText}
+                        </span>
                         {d.api_token ? (
                           <span className="badge badge-info" title={`Token: ${d.api_token}`}>
                             🔑 Token Protected
@@ -793,15 +974,13 @@ export const App: React.FC = () => {
                           </span>
                         )}
                         <span className={`badge ${d.is_enabled ? "badge-resolved" : "badge-critical"}`}>
-                          {d.is_enabled ? "Active / Ingestion Allowed" : "Disabled / Blocked"}
+                          {d.is_enabled ? "Ingestion Allowed" : "Ingestion Blocked"}
                         </span>
                       </div>
                       <div style={{ fontSize: "12px", color: "#8fa0b5" }}>
                         Location: <span style={{ color: "#cbd5e1" }}>{d.location || "N/A"}</span> &bull; 
                         Registered: {new Date(d.created_at).toLocaleDateString()} &bull; 
-                        Last Telemetry: <span style={{ color: d.latest_report_time ? "#10b981" : "#f59e0b" }}>
-                          {d.latest_report_time ? new Date(d.latest_report_time).toLocaleString() : "Never reported"}
-                        </span>
+                        Status: <span style={{ color: statusInfo.color, fontWeight: 600 }}>{statusInfo.subText}</span>
                       </div>
                     </div>
 
@@ -823,7 +1002,8 @@ export const App: React.FC = () => {
                       </button>
                     </div>
                   </div>
-                ))}
+                );
+              })}
 
                 {devices.length === 0 && (
                   <div style={{ textAlign: "center", padding: "40px", color: "#8fa0b5" }}>
