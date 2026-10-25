@@ -49,6 +49,7 @@ class Device(Base):
     name = Column(String(128), nullable=False)
     location = Column(String(256), nullable=True)
     is_enabled = Column(Boolean, default=True, nullable=False)
+    api_token = Column(String(128), unique=True, nullable=True, index=True)
     latest_report_time = Column(UTCDateTime, nullable=True, index=True)
     server_last_received_at = Column(UTCDateTime, nullable=True)
     created_at = Column(UTCDateTime, default=utcnow, nullable=False)
@@ -56,6 +57,19 @@ class Device(Base):
 
     events = relationship("Event", back_populates="device", cascade="all, delete-orphan")
     incidents = relationship("Incident", back_populates="device", cascade="all, delete-orphan")
+
+
+class DevicePairingCode(Base):
+    __tablename__ = "device_pairing_codes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(32), unique=True, nullable=False, index=True)
+    device_id = Column(String(64), nullable=False, index=True)
+    device_name = Column(String(128), nullable=False)
+    location = Column(String(256), nullable=True)
+    is_used = Column(Boolean, default=False, nullable=False)
+    expires_at = Column(UTCDateTime, nullable=False)
+    created_at = Column(UTCDateTime, default=utcnow, nullable=False)
 
 
 class Event(Base):

@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
-from typing import List, Tuple
+﻿from datetime import datetime, timezone
+from typing import List, Tuple, Optional
 import logging
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,13 +9,17 @@ from app.core.broadcaster import broadcaster
 
 logger = logging.getLogger("ingest")
 
+class DeviceAuthenticationError(Exception):
+    pass
+
 async def ingest_events_batch(
     session: AsyncSession,
-    items: List[EventIngestItem]
+    items: List[EventIngestItem],
+    device_token: Optional[str] = None
 ) -> Tuple[int, int, List[IngestStatusDetail]]:
     """
     Ingest a batch of events within a single database transaction.
-    - Validates device registration and enabled status.
+    - Validates device registration, enabled status, and token-gated auth when configured.
     - Idempotently handles duplicates using DB constraint (device_id, event_id).
     - Inserts corresponding WorkItem for newly accepted events atomically.
     - Updates device latest_report_time monotonically (GREATEST) and server_last_received_at.
@@ -31,12 +35,19 @@ async def ingest_events_batch(
     )
     existing_devices = {d.id: d for d in devices_query.scalars().all()}
 
-    # Check for unknown or disabled devices
+    # Check for unknown or disabled devices, and validate token
     for dev_id in device_ids:
         if dev_id not in existing_devices:
             raise ValueError(f"Unregistered device '{dev_id}'. Registration required before sending telemetry.")
-        if not existing_devices[dev_id].is_enabled:
+        
+        dev = existing_devices[dev_id]
+        if not dev.is_enabled:
             raise ValueError(f"Device '{dev_id}' is disabled.")
+            
+        # Token validation: If device has an api_token configured, request must supply matching token
+        if dev.api_token:
+            if not device_token or device_token != dev.api_token:
+                raise DeviceAuthenticationError(f"Invalid or missing device API token for device '{dev_id}'.")
 
     now_server = datetime.now(timezone.utc)
     accepted_count = 0
@@ -59,12 +70,11 @@ async def ingest_events_batch(
                 details.append(IngestStatusDetail(
                     event_id=item.event_id,
                     status="duplicate",
-                    message="Event already accepted previously."
+                    message="Event already ingested"
                 ))
                 continue
 
-            # Create new event record
-            new_event = Event(
+            event_record = Event(
                 device_id=item.device_id,
                 event_id=item.event_id,
                 event_type=item.event_type,
@@ -73,48 +83,51 @@ async def ingest_events_batch(
                 payload=item.payload,
                 processing_status="pending",
             )
-            session.add(new_event)
-            await session.flush() # populate new_event.id
+            session.add(event_record)
+            await session.flush()
 
-            # Insert durable work item in the same transaction
             work_item = WorkItem(
-                event_pk=new_event.id,
+                event_pk=event_record.id,
                 status="pending",
                 attempts=0,
                 available_at=now_server,
             )
             session.add(work_item)
 
-            # Update device latest_report_time monotonically
-            device = existing_devices[item.device_id]
-            if device.latest_report_time is None or item.event_time > device.latest_report_time:
-                device.latest_report_time = item.event_time
-            device.server_last_received_at = now_server
+            dev = existing_devices[item.device_id]
+            if dev.latest_report_time is None or item.event_time > dev.latest_report_time:
+                dev.latest_report_time = item.event_time
+            dev.server_last_received_at = now_server
 
             accepted_count += 1
             details.append(IngestStatusDetail(
                 event_id=item.event_id,
                 status="accepted",
-                message="Event accepted and queued for durable processing."
+                message=None
             ))
 
             accepted_events_data.append({
-                "id": new_event.id,
-                "event_id": new_event.event_id,
-                "device_id": new_event.device_id,
-                "event_type": new_event.event_type,
-                "event_time": new_event.event_time.isoformat(),
-                "received_at": new_event.received_at.isoformat(),
-                "payload": new_event.payload,
+                "id": event_record.id,
+                "event_id": item.event_id,
+                "device_id": item.device_id,
+                "event_type": item.event_type,
+                "event_time": item.event_time.isoformat(),
+                "received_at": now_server.isoformat(),
+                "payload": item.payload,
+                "processing_status": "pending",
             })
 
         await session.commit()
 
-        # Non-blocking broadcast of accepted events
-        for evt in accepted_events_data:
-            await broadcaster.broadcast("event_received", evt)
-
-        return accepted_count, duplicate_count, details
     except Exception as e:
         await session.rollback()
-        raise e
+        logger.error(f"Failed to ingest event batch: {e}", exc_info=True)
+        raise
+
+    for event_data in accepted_events_data:
+        try:
+            await broadcaster.broadcast("event_received", event_data)
+        except Exception as e:
+            logger.warning(f"Failed to broadcast event_received SSE for {event_data['event_id']}: {e}")
+
+    return accepted_count, duplicate_count, details

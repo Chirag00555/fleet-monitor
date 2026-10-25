@@ -55,7 +55,37 @@ class DeviceResponse(BaseModel):
     name: str
     location: Optional[str]
     is_enabled: bool
+    api_token: Optional[str] = None
     latest_report_time: Optional[datetime]
     server_last_received_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+
+
+class PairingCodeGenerateRequest(BaseModel):
+    device_id: str = Field(..., min_length=1, max_length=64)
+    device_name: str = Field(..., min_length=1, max_length=128)
+    location: Optional[str] = Field(None, max_length=256)
+    expires_in_minutes: int = Field(default=15, ge=1, le=1440)
+
+
+class PairingCodeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    device_id: str
+    device_name: str
+    location: Optional[str]
+    expires_at: datetime
+    created_at: datetime
+
+
+class PairDeviceClaimRequest(BaseModel):
+    pairing_code: str = Field(..., min_length=4, max_length=32)
+
+
+class PairDeviceClaimResponse(BaseModel):
+    device_id: str
+    device_name: str
+    api_token: str
+    message: str = "Device successfully paired and registered"

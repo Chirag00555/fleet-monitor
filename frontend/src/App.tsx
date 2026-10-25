@@ -1,7 +1,8 @@
 ﻿import React, { useState, useEffect } from "react";
-import type { Device, TelemetryEvent, Incident, IncidentDetail, OperatorUser } from "./types";
+import type { Device, TelemetryEvent, Incident, IncidentDetail, OperatorUser, PairingCode } from "./types";
 
-const API_BASE = "http://localhost:8000/api";
+// const API_BASE = "http://localhost:8000/api";
+const API_BASE="http://10.2.0.134:8000/api"
 
 export const App: React.FC = () => {
   // Authentication state
@@ -16,6 +17,7 @@ export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"operations" | "devices">("operations");
   const [deviceActionLoading, setDeviceActionLoading] = useState<string | null>(null);
   const [showAddDeviceModal, setShowAddDeviceModal] = useState<boolean>(false);
+  const [generatedPairingCode, setGeneratedPairingCode] = useState<PairingCode | null>(null);
   const [newDeviceId, setNewDeviceId] = useState<string>("");
   const [newDeviceName, setNewDeviceName] = useState<string>("");
   const [newDeviceLocation, setNewDeviceLocation] = useState<string>("");
@@ -297,29 +299,49 @@ export const App: React.FC = () => {
     e.preventDefault();
     setAddDeviceError("");
     try {
-      const res = await fetch(`${API_BASE}/devices`, {
+      const res = await fetch(`${API_BASE}/devices/pairing/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: newDeviceId.trim(),
-          name: newDeviceName.trim(),
+          device_id: newDeviceId.trim(),
+          device_name: newDeviceName.trim(),
           location: newDeviceLocation.trim() || undefined,
-          is_enabled: true
+          expires_in_minutes: 15
         })
       });
       if (res.ok) {
-        const created: Device = await res.json();
-        setDevices((prev) => [...prev, created]);
+        const codeData: PairingCode = await res.json();
+        setGeneratedPairingCode(codeData);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setAddDeviceError(err.detail || "Failed to generate pairing code");
+      }
+    } catch (err) {
+      setAddDeviceError("Network error while generating pairing code");
+    }
+  };
+
+  const handleSimulateDeviceClaim = async (code: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/devices/pairing/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pairing_code: code })
+      });
+      if (res.ok) {
+        await fetchAllState();
+        setGeneratedPairingCode(null);
+        setShowAddDeviceModal(false);
         setNewDeviceId("");
         setNewDeviceName("");
         setNewDeviceLocation("");
-        setShowAddDeviceModal(false);
+        alert("Device paired successfully and acquired its API token!");
       } else {
         const err = await res.json().catch(() => ({}));
-        setAddDeviceError(err.detail || "Failed to register device");
+        alert(err.detail || "Failed to claim pairing code");
       }
     } catch (err) {
-      setAddDeviceError("Network error while registering device");
+      alert("Network error claiming pairing code");
     }
   };
 
@@ -761,6 +783,15 @@ export const App: React.FC = () => {
                         <code style={{ background: "#0d1117", padding: "2px 6px", borderRadius: "4px", fontSize: "12px", color: "#00d2ff" }}>
                           {d.id}
                         </code>
+                        {d.api_token ? (
+                          <span className="badge badge-info" title={`Token: ${d.api_token}`}>
+                            🔑 Token Protected
+                          </span>
+                        ) : (
+                          <span className="badge badge-warning" title="Legacy device without API token">
+                            🔓 Open Ingestion
+                          </span>
+                        )}
                         <span className={`badge ${d.is_enabled ? "badge-resolved" : "badge-critical"}`}>
                           {d.is_enabled ? "Active / Ingestion Allowed" : "Disabled / Blocked"}
                         </span>
@@ -878,97 +909,149 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Add Device Modal (Stage 2) */}
+      {/* Add Device / Pairing Code Modal (Stage 3) */}
       {showAddDeviceModal && (
-        <div className="modal-overlay" onClick={() => setShowAddDeviceModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "460px" }}>
+        <div className="modal-overlay" onClick={() => { setShowAddDeviceModal(false); setGeneratedPairingCode(null); }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "480px" }}>
             <div className="modal-header">
-              <h3 style={{ fontSize: "16px" }}>Pair New Edge Device</h3>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowAddDeviceModal(false)}>✕</button>
+              <h3 style={{ fontSize: "16px" }}>
+                {generatedPairingCode ? "Device Pairing Code Generated" : "Generate Device Pairing Code"}
+              </h3>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setShowAddDeviceModal(false); setGeneratedPairingCode(null); }}>✕</button>
             </div>
-            <form onSubmit={handleRegisterDevice}>
+
+            {generatedPairingCode ? (
               <div className="modal-body">
-                {addDeviceError && (
-                  <div style={{
-                    background: "rgba(239, 68, 68, 0.15)",
-                    border: "1px solid rgba(239, 68, 68, 0.4)",
-                    color: "#fca5a5",
-                    padding: "8px 12px",
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                    marginBottom: "16px"
-                  }}>
-                    ⚠️ {addDeviceError}
+                <div style={{ textAlign: "center", padding: "12px 0 20px 0" }}>
+                  <div style={{ fontSize: "13px", color: "#8fa0b5", marginBottom: "12px" }}>
+                    Enter this one-time code on the hardware unit to complete registration:
                   </div>
-                )}
-                <div style={{ marginBottom: "14px" }}>
-                  <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
-                    Device Identifier (e.g. device-04-pump)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={newDeviceId}
-                    onChange={(e) => setNewDeviceId(e.target.value)}
-                    placeholder="device-04-pump"
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      background: "#0d131f",
-                      border: "1px solid #223249",
-                      borderRadius: "6px",
-                      color: "#fff",
-                      fontSize: "13px"
-                    }}
-                  />
+                  <div style={{
+                    display: "inline-block",
+                    padding: "14px 28px",
+                    background: "rgba(0, 210, 255, 0.1)",
+                    border: "2px dashed #00d2ff",
+                    borderRadius: "8px",
+                    fontSize: "28px",
+                    fontWeight: 700,
+                    letterSpacing: "4px",
+                    color: "#00d2ff",
+                    fontFamily: "monospace"
+                  }}>
+                    {generatedPairingCode.code}
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#f59e0b", marginTop: "12px" }}>
+                    ⏳ Expires at {new Date(generatedPairingCode.expires_at).toLocaleTimeString()} (15 minutes)
+                  </div>
                 </div>
-                <div style={{ marginBottom: "14px" }}>
-                  <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
-                    Display Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={newDeviceName}
-                    onChange={(e) => setNewDeviceName(e.target.value)}
-                    placeholder="Hydraulic Pressure Pump 4"
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      background: "#0d131f",
-                      border: "1px solid #223249",
-                      borderRadius: "6px",
-                      color: "#fff",
-                      fontSize: "13px"
-                    }}
-                  />
+
+                <div style={{ background: "#0d1117", padding: "12px", borderRadius: "6px", border: "1px solid #26354d", fontSize: "12px", marginBottom: "16px" }}>
+                  <div><strong>Device ID:</strong> <code>{generatedPairingCode.device_id}</code></div>
+                  <div><strong>Device Name:</strong> {generatedPairingCode.device_name}</div>
+                  <div><strong>Location:</strong> {generatedPairingCode.location || "N/A"}</div>
                 </div>
-                <div style={{ marginBottom: "14px" }}>
-                  <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
-                    Location (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={newDeviceLocation}
-                    onChange={(e) => setNewDeviceLocation(e.target.value)}
-                    placeholder="Facility Sector C - North Wing"
-                    style={{
-                      width: "100%",
-                      padding: "8px 12px",
-                      background: "#0d131f",
-                      border: "1px solid #223249",
-                      borderRadius: "6px",
-                      color: "#fff",
-                      fontSize: "13px"
-                    }}
-                  />
+
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button
+                    className="btn btn-success"
+                    style={{ flex: 1 }}
+                    onClick={() => handleSimulateDeviceClaim(generatedPairingCode.code)}
+                  >
+                    Simulate Hardware Pair (Claim Now)
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => { setShowAddDeviceModal(false); setGeneratedPairingCode(null); }}
+                  >
+                    Done
+                  </button>
                 </div>
               </div>
-              <div className="modal-footer">
-                <button type="submit" className="btn btn-primary">Pair Device</button>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddDeviceModal(false)}>Cancel</button>
-              </div>
-            </form>
+            ) : (
+              <form onSubmit={handleRegisterDevice}>
+                <div className="modal-body">
+                  {addDeviceError && (
+                    <div style={{
+                      background: "rgba(239, 68, 68, 0.15)",
+                      border: "1px solid rgba(239, 68, 68, 0.4)",
+                      color: "#fca5a5",
+                      padding: "8px 12px",
+                      borderRadius: "6px",
+                      fontSize: "12px",
+                      marginBottom: "16px"
+                    }}>
+                      ⚠️ {addDeviceError}
+                    </div>
+                  )}
+                  <div style={{ marginBottom: "14px" }}>
+                    <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
+                      Device Identifier (e.g. device-04-pump)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newDeviceId}
+                      onChange={(e) => setNewDeviceId(e.target.value)}
+                      placeholder="device-04-pump"
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        background: "#0d131f",
+                        border: "1px solid #223249",
+                        borderRadius: "6px",
+                        color: "#fff",
+                        fontSize: "13px"
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginBottom: "14px" }}>
+                    <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
+                      Display Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newDeviceName}
+                      onChange={(e) => setNewDeviceName(e.target.value)}
+                      placeholder="Hydraulic Pressure Pump 4"
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        background: "#0d131f",
+                        border: "1px solid #223249",
+                        borderRadius: "6px",
+                        color: "#fff",
+                        fontSize: "13px"
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginBottom: "14px" }}>
+                    <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
+                      Location (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={newDeviceLocation}
+                      onChange={(e) => setNewDeviceLocation(e.target.value)}
+                      placeholder="Facility Sector C - North Wing"
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        background: "#0d131f",
+                        border: "1px solid #223249",
+                        borderRadius: "6px",
+                        color: "#fff",
+                        fontSize: "13px"
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="submit" className="btn btn-primary">Generate Pairing Code</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowAddDeviceModal(false)}>Cancel</button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

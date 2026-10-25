@@ -4,15 +4,16 @@
     container_name: fleet_postgres
     restart: always
     environment:
-      POSTGRES_USER: \
-      POSTGRES_PASSWORD: \
-      POSTGRES_DB: \
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fleet_monitor
     ports:
-      - "5432:5432"
+      # Use port 5433 on host so it does not conflict with existing local_postgres container on 5432
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \ -d \"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fleet_monitor"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -29,12 +30,13 @@
     environment:
       POSTGRES_SERVER: db
       POSTGRES_PORT: 5432
-      POSTGRES_USER: \
-      POSTGRES_PASSWORD: \
-      POSTGRES_DB: \
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fleet_monitor
       ENVIRONMENT: production
     ports:
-      - "8000:8000"
+      # Use port 8001 on host so it does not conflict with the local uvicorn on port 8000
+      - "8001:8000"
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
@@ -50,11 +52,81 @@
     environment:
       POSTGRES_SERVER: db
       POSTGRES_PORT: 5432
-      POSTGRES_USER: \
-      POSTGRES_PASSWORD: \
-      POSTGRES_DB: \
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fleet_monitor
       ENVIRONMENT: production
     command: python -m app.worker.processor
+
+  # Multi-Device Edge Simulators (Stage 3)
+  simulator-freezer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_sim_freezer
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: >
+      python -m simulator.device_simulator
+      --url http://host.docker.internal:8000
+      --device-id device-01-freezer
+      --device-name "Cryo-Freezer Unit 1"
+      --location "Pharma Lab A"
+      --interval 3.0
+      --threshold 80.0
+      --duration 999999
+      --disconnect-at 0
+      --disconnect-duration 0
+      --no-duplicate-demo
+
+  simulator-conveyor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_sim_conveyor
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: >
+      python -m simulator.device_simulator
+      --url http://host.docker.internal:8000
+      --device-id device-02-conveyor
+      --device-name "Assembly Conveyor Motor"
+      --location "Factory Floor Bay 3"
+      --interval 2.5
+      --threshold 85.0
+      --duration 999999
+      --disconnect-at 0
+      --disconnect-duration 0
+      --no-duplicate-demo
+
+  simulator-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_sim_generator
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: >
+      python -m simulator.device_simulator
+      --url http://host.docker.internal:8000
+      --device-id device-03-generator
+      --device-name "Backup Diesel Generator"
+      --location "Substation Outdoor"
+      --interval 4.0
+      --threshold 90.0
+      --duration 999999
+      --disconnect-at 0
+      --disconnect-duration 0
+      --no-duplicate-demo
 
 volumes:
   postgres_data:

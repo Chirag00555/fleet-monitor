@@ -30,8 +30,12 @@ class DeviceSimulator:
         temp_max: float = 95.0,
         spike_prob: float = 0.2,
         spike_threshold: float = 85.0,
-        batch_size: int = 50
+        batch_size: int = 50,
+        pairing_code: Optional[str] = None,
+        api_token: Optional[str] = None
     ):
+        self.pairing_code = pairing_code
+        self.api_token = api_token
         self.base_url = base_url.rstrip("/")
         self.device_id = device_id
         self.device_name = device_name
@@ -47,8 +51,32 @@ class DeviceSimulator:
         self.buffer: List[Dict[str, Any]] = []
         self.is_disconnected = False
 
+
+    def claim_pairing_code(self) -> bool:
+        """Claim pairing code and save assigned API token."""
+        if not self.pairing_code:
+            return False
+        url = f"{self.base_url}/api/devices/pairing/claim"
+        try:
+            resp = self.client.post(url, json={"pairing_code": self.pairing_code})
+            if resp.status_code == 200:
+                data = resp.json()
+                self.api_token = data.get("api_token")
+                self.device_id = data.get("device_id", self.device_id)
+                logger.info(f"Successfully claimed pairing code. Assigned token: {self.api_token[:12]}... for {self.device_id}")
+                return True
+            else:
+                logger.warning(f"Failed to claim pairing code: {resp.status_code} - {resp.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error claiming pairing code: {e}")
+            return False
+
     def register_device(self) -> bool:
         """Register device with backend if not already registered."""
+        if self.pairing_code and not self.api_token:
+            if self.claim_pairing_code():
+                return True
         url = f"{self.base_url}/api/devices"
         payload = {
             "id": self.device_id,
@@ -101,8 +129,11 @@ class DeviceSimulator:
     def send_single_event(self, event: Dict[str, Any]) -> bool:
         """Send a single event to /api/events."""
         url = f"{self.base_url}/api/events"
+        headers = {}
+        if self.api_token:
+            headers["X-Device-Token"] = self.api_token
         try:
-            resp = self.client.post(url, json=event)
+            resp = self.client.post(url, json=event, headers=headers)
             if resp.status_code == 202:
                 logger.info(f"Sent event {event['event_id']} (temp: {event['payload'].get('temperature')}) -> status: {resp.json().get('status')}")
                 return True
@@ -122,10 +153,13 @@ class DeviceSimulator:
         url = f"{self.base_url}/api/events/batch"
         logger.info(f"Reconnecting... Replaying {len(self.buffer)} buffered events in chunks of {self.batch_size}...")
 
+        headers = {}
+        if self.api_token:
+            headers["X-Device-Token"] = self.api_token
         while self.buffer:
             chunk = self.buffer[:self.batch_size]
             try:
-                resp = self.client.post(url, json={"events": chunk})
+                resp = self.client.post(url, json={"events": chunk}, headers=headers)
                 if resp.status_code == 202:
                     result = resp.json()
                     accepted = result.get("accepted", 0)
@@ -210,8 +244,14 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", type=float, default=85.0, help="Spike threshold value")
     parser.add_argument("--spike-prob", type=float, default=0.25, help="Probability of high temperature spike")
     parser.add_argument("--no-duplicate-demo", action="store_true", help="Disable duplicate demonstration")
+    parser.add_argument("--pairing-code", default=None, help="One-time pairing code to claim upon startup")
+    parser.add_argument("--token", default=None, help="Pre-provisioned device API token")
 
     args = parser.parse_args()
+
+    import os
+    token = args.token or os.environ.get("DEVICE_API_TOKEN")
+    pairing_code = args.pairing_code or os.environ.get("DEVICE_PAIRING_CODE")
 
     sim = DeviceSimulator(
         base_url=args.url,
@@ -220,7 +260,9 @@ if __name__ == "__main__":
         location=args.location,
         interval=args.interval,
         spike_threshold=args.threshold,
-        spike_prob=args.spike_prob
+        spike_prob=args.spike_prob,
+        pairing_code=pairing_code,
+        api_token=token
     )
     sim.run_simulation(
         duration_seconds=args.duration,

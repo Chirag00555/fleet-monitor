@@ -3,6 +3,7 @@ export interface Device {
   name: string;
   location?: string | null;
   is_enabled: boolean;
+  api_token?: string | null;
   latest_report_time?: string | null;
   server_last_received_at?: string | null;
   created_at: string;
@@ -53,6 +54,7 @@ export interface Rule {
   id: number;
   name: string;
   is_enabled: boolean;
+  api_token?: string | null;
   rule_type: string;
   device_id?: string | null;
   comparator?: string | null;
@@ -68,5 +70,13 @@ export interface OperatorUser {
   full_name?: string | null;
   role: string;
   is_active: boolean;
+  created_at: string;
+}
+export interface PairingCode {
+  code: string;
+  device_id: string;
+  device_name: string;
+  location?: string | null;
+  expires_at: string;
   created_at: string;
 }

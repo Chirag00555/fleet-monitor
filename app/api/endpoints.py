@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.db.session import get_db
 from app.core.config import settings
 from app.core.broadcaster import broadcaster
-from app.models.entities import Device, Rule, Incident, IncidentEvent, Event
+from app.models.entities import Device, DevicePairingCode, Rule, Incident, IncidentEvent, Event
 from app.schemas.events import (
     EventIngestItem,
     EventBatchIngestRequest,
@@ -19,6 +19,10 @@ from app.schemas.events import (
     DeviceRegistrationRequest,
     DeviceResponse,
     DeviceUpdateRequest,
+    PairingCodeGenerateRequest,
+    PairingCodeResponse,
+    PairDeviceClaimRequest,
+    PairDeviceClaimResponse,
 )
 from app.schemas.rules_incidents import (
     RuleCreateRequest,
@@ -28,7 +32,8 @@ from app.schemas.rules_incidents import (
     IncidentTransitionRequest,
     IncidentEventDetail,
 )
-from app.api.ingest_service import ingest_events_batch
+from app.api.ingest_service import ingest_events_batch, DeviceAuthenticationError
+import secrets
 
 router = APIRouter(prefix="/api", tags=["fleet-ops"])
 
@@ -90,10 +95,19 @@ async def sse_event_stream(request: Request):
 )
 async def ingest_single_event(
     event: EventIngestItem,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    request: Request = None
 ):
+    token = request.headers.get("X-Device-Token") if request else None
+    if not token and request:
+        auth_hdr = request.headers.get("Authorization", "")
+        if auth_hdr.startswith("Bearer "):
+            token = auth_hdr[7:].strip()
+
     try:
-        accepted, duplicates, details = await ingest_events_batch(db, [event])
+        accepted, duplicates, details = await ingest_events_batch(db, [event], device_token=token)
+    except DeviceAuthenticationError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -115,7 +129,8 @@ async def ingest_single_event(
 )
 async def ingest_batch_events(
     request: EventBatchIngestRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    req: Request = None
 ):
     if len(request.events) > settings.MAX_EVENT_BATCH_SIZE:
         raise HTTPException(
@@ -123,8 +138,16 @@ async def ingest_batch_events(
             detail=f"Batch size {len(request.events)} exceeds maximum allowed limit of {settings.MAX_EVENT_BATCH_SIZE}"
         )
 
+    token = req.headers.get("X-Device-Token") if req else None
+    if not token and req:
+        auth_hdr = req.headers.get("Authorization", "")
+        if auth_hdr.startswith("Bearer "):
+            token = auth_hdr[7:].strip()
+
     try:
-        accepted, duplicates, details = await ingest_events_batch(db, request.events)
+        accepted, duplicates, details = await ingest_events_batch(db, request.events, device_token=token)
+    except DeviceAuthenticationError as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -248,6 +271,96 @@ async def delete_device(
     await db.delete(device)
     await db.commit()
     return None
+
+
+# ----------------- DEVICE PAIRING & TOKEN LIFECYCLE -----------------
+
+@router.post(
+    "/devices/pairing/generate",
+    response_model=PairingCodeResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate a short-lived pairing code for edge hardware"
+)
+async def generate_pairing_code(
+    payload: PairingCodeGenerateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    from datetime import timedelta
+    code = secrets.token_hex(4).upper() # 8-character hex code, e.g. A1B2C3D4
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=payload.expires_in_minutes)
+
+    pairing_entry = DevicePairingCode(
+        code=code,
+        device_id=payload.device_id,
+        device_name=payload.device_name,
+        location=payload.location,
+        is_used=False,
+        expires_at=expires_at
+    )
+    db.add(pairing_entry)
+    await db.commit()
+    await db.refresh(pairing_entry)
+    return pairing_entry
+
+
+@router.post(
+    "/devices/pairing/claim",
+    response_model=PairDeviceClaimResponse,
+    summary="Edge device claims pairing code and receives unique API token"
+)
+async def claim_pairing_code(
+    payload: PairDeviceClaimRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    code_str = payload.pairing_code.strip().upper()
+    now = datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(DevicePairingCode).where(
+            and_(
+                DevicePairingCode.code == code_str,
+                DevicePairingCode.is_used == False,
+                DevicePairingCode.expires_at > now
+            )
+        )
+    )
+    pairing = result.scalar_one_or_none()
+    if not pairing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired pairing code."
+        )
+
+    # Generate unique device API token
+    device_token = f"dev_{secrets.token_urlsafe(32)}"
+
+    device = await db.get(Device, pairing.device_id)
+    if not device:
+        device = Device(
+            id=pairing.device_id,
+            name=pairing.device_name,
+            location=pairing.location,
+            is_enabled=True,
+            api_token=device_token
+        )
+        db.add(device)
+    else:
+        device.name = pairing.device_name
+        if pairing.location:
+            device.location = pairing.location
+        device.api_token = device_token
+        device.is_enabled = True
+
+    pairing.is_used = True
+    await db.commit()
+
+    return PairDeviceClaimResponse(
+        device_id=device.id,
+        device_name=device.name,
+        api_token=device_token,
+        message="Device successfully paired and registered"
+    )
+
 
 
 # ----------------- RULES MANAGEMENT -----------------
