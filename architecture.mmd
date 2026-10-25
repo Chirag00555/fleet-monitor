@@ -1,0 +1,123 @@
+﻿%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "fontSize": "14px",
+    "primaryColor": "#1e293b",
+    "primaryTextColor": "#f8fafc",
+    "primaryBorderColor": "#334155",
+    "lineColor": "#64748b",
+    "secondaryColor": "#0f172a",
+    "tertiaryColor": "#1e293b"
+  },
+  "flowchart": { "curve": "basis", "padding": 20 }
+}}%%
+
+flowchart TD
+
+  subgraph DEVICE_LAYER["Edge Device Layer (3x Docker containers)"]
+    direction TB
+    SIM1["simulator-freezer\ndevice-01-freezer\ninterval=3s  threshold=80"]
+    SIM2["simulator-conveyor\ndevice-02-conveyor\ninterval=2.5s  threshold=85"]
+    SIM3["simulator-generator\ndevice-03-generator\ninterval=4s  threshold=90"]
+    CREDS[".device_id_creds.json\nhost-volume mount\nstores api_token across restarts"]
+    SIM1 --- CREDS
+    SIM2 --- CREDS
+    SIM3 --- CREDS
+  end
+
+  subgraph BACKEND_PROC["Backend Process (fleet_backend container - port 8000)"]
+    direction TB
+
+    subgraph FASTAPI["FastAPI + asyncio  (app/main.py)"]
+      direction LR
+      INGEST_EP["POST /api/events\nPOST /api/events/batch\nX-Device-Token validation\n(app/api/ingest_service.py)"]
+      DEVICE_EP["GET/POST/PATCH/DELETE\n/api/devices\n/api/devices/pairing-code\n/api/devices/claim"]
+      RULES_EP["GET POST /api/rules"]
+      INC_EP["GET /api/incidents\nPOST .../acknowledge\nPOST .../resolve"]
+      AUTH_EP["POST /api/auth/login\nGET /api/auth/me\nJWT HS256 24h"]
+      SSE_EP["GET /api/events/stream\ntext/event-stream\n1s heartbeat\n(app/api/endpoints.py)"]
+    end
+
+    subgraph WORKER["Background Worker (asyncio task in SAME process as FastAPI)"]
+      direction TB
+      WL["run_worker_loop\npoll_interval=1s\n(app/worker/processor.py)"]
+      CLAIM["claim_next_work_items\nFOR UPDATE SKIP LOCKED\nbatch=10\nstale-lock reclaim at 5min"]
+      PROC["process_work_item\nexp backoff 2^n s cap 300s\nmax 5 attempts"]
+      RE["evaluate_event_rules\ntemperature_threshold\nevent_type\n(app/worker/rules_engine.py)"]
+      RECONN["evaluate_device_reconnect\nauto-resolves open\nsilence incidents"]
+      SILENCE["run_device_silence_check\nperiodic SILENCE_CHECK_INTERVAL\nfor each device_silence rule"]
+      WL -->|every poll interval| CLAIM
+      CLAIM -->|claimed items| PROC
+      PROC --> RE
+      PROC --> RECONN
+      WL -->|periodic timer| SILENCE
+    end
+
+    BROADCASTER["In-Memory Broadcaster\nasyncio.Queue per client max=100\n(app/core/broadcaster.py)\nSHARED IN-PROCESS with Worker\nEvent types:\nevent_received\nincident_created / incident_updated\nincident_acknowledged / incident_resolved\ndevice_status online / offline / silent\ndevice_created / device_updated / device_deleted"]
+
+    FASTAPI -->|broadcast after ingest| BROADCASTER
+    BROADCASTER --> SSE_EP
+    WL -.->|same asyncio loop shares Broadcaster| BROADCASTER
+  end
+
+  subgraph DB["PostgreSQL 16  (fleet_postgres - port 5432 internal)"]
+    direction LR
+    T_DEVICES["devices\nid name location\napi_token is_enabled\nlatest_report_time"]
+    T_PAIRING["device_pairing_codes\ncode device_id\nis_used expires_at"]
+    T_EVENTS["events\ndevice_id event_id\nevent_type event_time payload\nprocessing_status\nUNIQUE(device_id,event_id)"]
+    T_WORKITEMS["work_items\nevent_pk status attempts\navailable_at locked_at\nlocked_by\nIDX(status,available_at)"]
+    T_RULES["rules\nrule_type comparator\nthreshold_value payload_field\nsilence_duration_seconds\nis_enabled severity"]
+    T_INCIDENTS["incidents\nrule_id device_id\nstatus severity\ndedup_key event_count\nopened_at resolved_at"]
+    T_INC_EVENTS["incident_events\nincident_id event_pk\nmany-to-many"]
+    T_OPERATORS["operators\nusername hashed_password\nrole is_active"]
+  end
+
+  subgraph FRONTEND["React Dashboard  (Vite - port 5173)"]
+    direction TB
+    LOGIN["Login Form\nPOST /api/auth/login\nJWT stored in localStorage"]
+    DASH["Operations Dashboard\nDevice status cards live badge\nTelemetry event feed last 50\nIncident list open/ack/resolved\nDevice management tab"]
+    SSE_CLIENT["EventSource /api/events/stream\nauto-reconnect at 3s on error\nfetchAllState on open"]
+    LOGIN -->|JWT received| DASH
+    DASH --- SSE_CLIENT
+  end
+
+  SIM1 -->|"1 POST /api/events\nX-Device-Token: token\nevent_id UUID device_id\nevent_type event_time payload"| INGEST_EP
+  SIM2 -->|"1 POST /api/events\nX-Device-Token"| INGEST_EP
+  SIM3 -->|"1 POST /api/events\nX-Device-Token"| INGEST_EP
+  SIM1 -.->|"1b POST /api/events/batch\nreplay after network outage"| INGEST_EP
+
+  INGEST_EP -->|"2 WRITE atomic tx\nINSERT event + work_item\nUPDATE latest_report_time"| T_EVENTS
+  INGEST_EP -->|2 WRITE| T_WORKITEMS
+  INGEST_EP -->|2 WRITE| T_DEVICES
+  INGEST_EP -->|3 broadcast event_received| BROADCASTER
+
+  CLAIM -->|"4 SELECT FOR UPDATE SKIP LOCKED"| T_WORKITEMS
+  RE -->|5 READ enabled rules| T_RULES
+  RE -->|5 READ event payload| T_EVENTS
+  RE -->|"5 WRITE INSERT or UPDATE incident\ndedup via dedup_key"| T_INCIDENTS
+  RE -->|5 WRITE assoc| T_INC_EVENTS
+  RECONN -->|6 WRITE auto-resolve silence incidents| T_INCIDENTS
+  SILENCE -->|7 READ latest_report_time vs threshold| T_DEVICES
+  SILENCE -->|7 WRITE open or update silence incident| T_INCIDENTS
+  RE -->|5 broadcast incident_created or updated| BROADCASTER
+  RECONN -->|"6 broadcast incident_resolved\ndevice_status=online"| BROADCASTER
+  SILENCE -->|"7 broadcast incident_created or updated\ndevice_status=offline"| BROADCASTER
+  PROC -->|4 UPDATE work_item status| T_WORKITEMS
+
+  LOGIN -->|"8 POST /api/auth/login"| AUTH_EP
+  AUTH_EP -->|READ hashed_password| T_OPERATORS
+  DASH -->|"9 GET /api/devices\nGET /api/incidents\nGET /api/events?limit=50\nGET /api/incidents/id"| DEVICE_EP
+  DASH -->|9 GET| RULES_EP
+  DASH -->|9 GET| INC_EP
+  DEVICE_EP -->|READ/WRITE| T_DEVICES
+  DEVICE_EP -->|WRITE generate pairing code| T_PAIRING
+  RULES_EP -->|READ/WRITE| T_RULES
+  INC_EP -->|READ/WRITE ack or resolve| T_INCIDENTS
+  INC_EP -->|"10 broadcast incident_acknowledged\nor incident_resolved"| BROADCASTER
+
+  SSE_EP -->|"11 text/event-stream named events"| SSE_CLIENT
+  SSE_CLIENT -->|update React state no page reload| DASH
+
+  DEVICE_EP -.->|Operator generates pairing code| T_PAIRING
+  SIM1 -.->|"POST /api/devices/claim\npairing_code => api_token\none-time expires"| DEVICE_EP
+  DEVICE_EP -.->|WRITE api_token to device| T_DEVICES

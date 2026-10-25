@@ -4,6 +4,15 @@ A complete, resilient platform for monitoring a fleet of distributed devices, in
 
 ---
 
+## Deliverables & Documentation
+
+- **Evaluation & Run Instructions:** [run-instructions.md](run-instructions.md)  -  Prerequisites, first-time setup, start commands, multi-device simulator setup, and 5-minute evaluation walkthrough.
+- **Architecture Notes:** [architecture-notes.md](architecture-notes.md)  -  Detailed rationale for key decisions, alternatives considered, trade-offs, and implementation status.
+- **Architecture Diagram:** [architecture.png](architecture.png) / [architecture.mmd](architecture.mmd)  -  Visual component map and numbered end-to-end data flow.
+- **Deployment Notes:** [deployment-notes.md](deployment-notes.md)  -  Production topology, monitoring, horizontal scaling, and security considerations.
+
+
+
 ## 1. Architecture & End-to-End Event Flow
 
 `
