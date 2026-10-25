@@ -406,3 +406,55 @@ async def resolve_incident(
         "resolved_at": incident.resolved_at.isoformat()
     })
     return incident
+# ----------------- OPERATOR AUTHENTICATION -----------------
+
+from app.schemas.auth import LoginRequest, TokenResponse, OperatorResponse
+from app.core.auth import (
+    verify_password,
+    create_access_token,
+    get_current_operator,
+    ensure_default_operator,
+)
+from app.models.entities import Operator
+
+@router.post(
+    "/auth/login",
+    response_model=TokenResponse,
+    tags=["auth"],
+    summary="Operator login returning access token"
+)
+async def login(credentials: LoginRequest, db: AsyncSession = Depends(get_db)):
+    # Make sure default admin exists in dev
+    await ensure_default_operator(db)
+
+    result = await db.execute(select(Operator).where(Operator.username == credentials.username))
+    operator = result.scalar_one_or_none()
+
+    if not operator or not verify_password(credentials.password, operator.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not operator.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operator account is inactive"
+        )
+
+    access_token = create_access_token(data={"sub": operator.username, "role": operator.role})
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        operator=OperatorResponse.model_validate(operator)
+    )
+
+@router.get(
+    "/auth/me",
+    response_model=OperatorResponse,
+    tags=["auth"],
+    summary="Get current authenticated operator profile"
+)
+async def get_me(current_operator: Operator = Depends(get_current_operator)):
+    return OperatorResponse.model_validate(current_operator)

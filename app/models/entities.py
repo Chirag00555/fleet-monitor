@@ -30,6 +30,18 @@ class UTCDateTime(TypeDecorator):
             return value.replace(tzinfo=timezone.utc)
         return value
 
+class Operator(Base):
+    __tablename__ = "operators"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(256), nullable=False)
+    full_name = Column(String(128), nullable=True)
+    role = Column(String(32), default="operator", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(UTCDateTime, default=utcnow, nullable=False)
+    updated_at = Column(UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
 class Device(Base):
     __tablename__ = "devices"
 
@@ -56,7 +68,7 @@ class Event(Base):
     event_time = Column(UTCDateTime, nullable=False, index=True)
     received_at = Column(UTCDateTime, default=utcnow, nullable=False)
     payload = Column(JSON, nullable=False)
-    processing_status = Column(String(32), default="pending", nullable=False) # pending, processed, failed
+    processing_status = Column(String(32), default="pending", nullable=False)
 
     device = relationship("Device", back_populates="events")
     work_items = relationship("WorkItem", back_populates="event", cascade="all, delete-orphan")
@@ -96,16 +108,15 @@ class Rule(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(128), nullable=False)
     is_enabled = Column(Boolean, default=True, nullable=False, index=True)
-    rule_type = Column(String(64), nullable=False, index=True) # temperature_threshold, event_type, device_silence
-    device_id = Column(String(64), ForeignKey("devices.id", ondelete="CASCADE"), nullable=True, index=True) # None = all devices
+    rule_type = Column(String(64), nullable=False, index=True)
+    device_id = Column(String(64), ForeignKey("devices.id", ondelete="CASCADE"), nullable=True, index=True)
     
-    # Typed configuration columns for safety, performance & clean validation
-    comparator = Column(String(16), nullable=True) # '>', '>=', '<', '<=', '==' (default for temperature is '>=')
-    threshold_value = Column(Float, nullable=True) # e.g. 80.0
-    payload_field = Column(String(64), default="temperature", nullable=True) # JSON field in payload
-    target_event_type = Column(String(64), nullable=True) # for event_type match
-    silence_duration_seconds = Column(Integer, nullable=True) # for device_silence rule
-    severity = Column(String(32), default="warning", nullable=False) # info, warning, critical
+    comparator = Column(String(16), nullable=True)
+    threshold_value = Column(Float, nullable=True)
+    payload_field = Column(String(64), default="temperature", nullable=True)
+    target_event_type = Column(String(64), nullable=True)
+    silence_duration_seconds = Column(Integer, nullable=True)
+    severity = Column(String(32), default="warning", nullable=False)
 
     created_at = Column(UTCDateTime, default=utcnow, nullable=False)
     updated_at = Column(UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False)
@@ -120,15 +131,11 @@ class Incident(Base):
     rule_id = Column(Integer, ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True)
     device_id = Column(String(64), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
     
-    # Status: 'open', 'acknowledged', 'resolved'
     status = Column(String(32), default="open", nullable=False, index=True)
     severity = Column(String(32), default="warning", nullable=False)
     title = Column(String(256), nullable=False)
     summary = Column(Text, nullable=False)
     
-    # Active incident deduplication key:
-    # Set to f"{rule_id}:{device_id}" while status is 'open' or 'acknowledged'.
-    # Cleared to None upon resolution so future occurrences can create a new incident.
     dedup_key = Column(String(128), nullable=True, unique=True, index=True)
 
     event_count = Column(Integer, default=1, nullable=False)

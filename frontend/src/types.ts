@@ -62,3 +62,11 @@ export interface Rule {
   silence_duration_seconds?: number | null;
   severity: string;
 }
+export interface OperatorUser {
+  id: number;
+  username: string;
+  full_name?: string | null;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+}

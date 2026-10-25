@@ -1,16 +1,26 @@
+﻿from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from app.db.session import get_db
+from app.db.session import get_db, async_session_factory
 from app.api.endpoints import router as api_router
 from app.core.config import settings
+from app.core.auth import ensure_default_operator
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure default operator on startup
+    async with async_session_factory() as session:
+        await ensure_default_operator(session)
+    yield
 
 app = FastAPI(
     title="Fleet Monitor Operations Platform",
     description="Real-Time Operations Platform for Device Fleet Telemetry and Incidents",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Enable CORS for dashboard web app
