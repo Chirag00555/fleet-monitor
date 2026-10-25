@@ -155,6 +155,18 @@ class DeviceSimulator:
             if resp.status_code == 202:
                 logger.info(f"Sent event {event['event_id']} (temp: {event['payload'].get('temperature')}) -> status: {resp.json().get('status')}")
                 return True
+            elif resp.status_code == 401:
+                logger.warning("Event send failed: HTTP 401 - Unauthorized. Checking for newly claimed token...")
+                saved_tok = self._load_saved_token()
+                if saved_tok and saved_tok != self.api_token:
+                    logger.info("Found newly claimed token on disk! Updating simulator token in real time...")
+                    self.api_token = saved_tok
+                    retry_headers = {"X-Device-Token": self.api_token}
+                    retry_resp = self.client.post(url, json=event, headers=retry_headers)
+                    if retry_resp.status_code == 202:
+                        logger.info(f"Successfully sent event with new token! Status: {retry_resp.json().get('status')}")
+                        return True
+                return False
             else:
                 logger.warning(f"Event send failed: HTTP {resp.status_code} - {resp.text}")
                 return False
