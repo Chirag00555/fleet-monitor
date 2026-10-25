@@ -10,6 +10,7 @@ export const App: React.FC = () => {
   const [selectedIncident, setSelectedIncident] = useState<IncidentDetail | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "reconnecting" | "offline">("offline");
   const [resolutionNote, setResolutionNote] = useState<string>("");
+  const [selectedDeviceFilter, setSelectedDeviceFilter] = useState<string>("all");
 
   const fetchAllState = async () => {
     try {
@@ -166,12 +167,17 @@ export const App: React.FC = () => {
 
   const activeIncidents = incidents.filter((i) => i.status !== "resolved");
   const criticalIncidents = incidents.filter((i) => i.status !== "resolved" && i.severity === "critical");
+  
+  // Filter events based on selected device dropdown
+  const filteredEvents = selectedDeviceFilter === "all" 
+    ? events 
+    : events.filter((e) => e.device_id === selectedDeviceFilter);
 
   return (
     <div className="dashboard-container">
       <header className="top-header">
         <div className="brand-section">
-          <span style={{ fontSize: "20px" }}>ðŸ›°ï¸</span>
+          <span style={{ fontSize: "20px" }}>🛰️</span>
           <div>
             <h1 className="brand-title">FLEET OPERATIONS CONSOLE</h1>
             <div style={{ fontSize: "11px", color: "#8fa0b5" }}>Real-time Edge Telemetry & Incident Intelligence</div>
@@ -215,7 +221,7 @@ export const App: React.FC = () => {
       <main className="main-content">
         <div className="panel">
           <div className="panel-header">
-            <h2 className="panel-title">ðŸš¨ Operational Incidents ({incidents.length})</h2>
+            <h2 className="panel-title">🚨 Operational Incidents ({incidents.length})</h2>
             <div style={{ display: "flex", gap: "8px" }}>
               <span className="badge badge-critical">{criticalIncidents.length} Critical</span>
               <span className="badge badge-warning">{activeIncidents.length - criticalIncidents.length} Warning</span>
@@ -265,7 +271,7 @@ export const App: React.FC = () => {
         <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
           <div className="panel" style={{ flex: "1" }}>
             <div className="panel-header">
-              <h2 className="panel-title">ðŸ“¡ Fleet Devices ({devices.length})</h2>
+              <h2 className="panel-title">📡 Fleet Devices ({devices.length})</h2>
             </div>
             <div className="panel-body" style={{ maxHeight: "200px" }}>
               {devices.length === 0 ? (
@@ -273,7 +279,19 @@ export const App: React.FC = () => {
               ) : (
                 <div className="list-container">
                   {devices.map((d) => (
-                    <div key={d.id} className="device-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div 
+                      key={d.id} 
+                      className="device-row" 
+                      style={{ 
+                        display: "flex", 
+                        justifyContent: "space-between", 
+                        alignItems: "center",
+                        cursor: "pointer",
+                        borderLeft: selectedDeviceFilter === d.id ? "3px solid #00d2ff" : undefined
+                      }}
+                      onClick={() => setSelectedDeviceFilter(selectedDeviceFilter === d.id ? "all" : d.id)}
+                      title="Click to filter live stream by this device"
+                    >
                       <div>
                         <div style={{ fontWeight: 600 }}>{d.name} <span style={{ fontSize: "11px", color: "#8fa0b5" }}>({d.id})</span></div>
                         <div style={{ fontSize: "11px", color: "#8fa0b5" }}>{d.location || "Unknown Location"}</div>
@@ -292,16 +310,46 @@ export const App: React.FC = () => {
           </div>
 
           <div className="panel" style={{ flex: "1.2" }}>
-            <div className="panel-header">
-              <h2 className="panel-title">âš¡ Live Ingestion Stream (SSE)</h2>
-              <span style={{ fontSize: "11px", color: "#8fa0b5" }}>Auto-updating</span>
+            <div className="panel-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <h2 className="panel-title">⚡ Live Ingestion Stream (SSE)</h2>
+                <span style={{ fontSize: "11px", color: "#8fa0b5" }}>({filteredEvents.length})</span>
+              </div>
+              
+              {/* Device Stream Filter Dropdown */}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <label style={{ fontSize: "11px", color: "#8fa0b5" }}>Filter:</label>
+                <select
+                  value={selectedDeviceFilter}
+                  onChange={(e) => setSelectedDeviceFilter(e.target.value)}
+                  style={{
+                    background: "#0d1117",
+                    color: "#00d2ff",
+                    border: "1px solid #26354d",
+                    borderRadius: "4px",
+                    padding: "3px 8px",
+                    fontSize: "11px",
+                    cursor: "pointer"
+                  }}
+                >
+                  <option value="all">All Devices (Fleet View)</option>
+                  {devices.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.id} ({d.name})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
+            
             <div className="panel-body" style={{ maxHeight: "250px" }}>
-              {events.length === 0 ? (
-                <div style={{ color: "#8fa0b5", textAlign: "center", padding: "20px" }}>Waiting for telemetry...</div>
+              {filteredEvents.length === 0 ? (
+                <div style={{ color: "#8fa0b5", textAlign: "center", padding: "20px" }}>
+                  {selectedDeviceFilter === "all" ? "Waiting for telemetry..." : "No telemetry received for this device yet."}
+                </div>
               ) : (
                 <div className="list-container">
-                  {events.slice(0, 15).map((evt) => (
+                  {filteredEvents.slice(0, 15).map((evt) => (
                     <div key={evt.device_id + "-" + evt.event_id} className="event-row">
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
                         <span>
@@ -332,7 +380,7 @@ export const App: React.FC = () => {
                 <span className={"badge badge-" + selectedIncident.status}>{selectedIncident.status}</span>
                 <h3 style={{ fontSize: "16px" }}>Incident #{selectedIncident.id}</h3>
               </div>
-              <button className="btn btn-secondary btn-sm" onClick={() => setSelectedIncident(null)}>âœ•</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setSelectedIncident(null)}>✕</button>
             </div>
 
             <div className="modal-body">
