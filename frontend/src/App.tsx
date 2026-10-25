@@ -241,7 +241,7 @@ export const App: React.FC = () => {
   // If initial auth token check is in flight
   if (authLoading) {
     return (
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", background: "#0a0d14", color: "#8fa0b5", fontFamily: "sans-serif" }}>
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", background: "#0a0e17", color: "#8fa0b5", fontFamily: "sans-serif" }}>
         <div>Initializing Fleet Operations Console...</div>
       </div>
     );
@@ -255,7 +255,7 @@ export const App: React.FC = () => {
         justifyContent: "center",
         alignItems: "center",
         minHeight: "100vh",
-        background: "radial-gradient(ellipse at top, #141c2b 0%, #0a0d14 100%)",
+        background: "radial-gradient(ellipse at top, #141c2b 0%, #0a0e17 100%)",
         color: "#f0f4f8",
         fontFamily: "'Segoe UI', Roboto, sans-serif",
         padding: "20px"
@@ -263,8 +263,8 @@ export const App: React.FC = () => {
         <div style={{
           width: "100%",
           maxWidth: "420px",
-          background: "rgba(16, 24, 39, 0.85)",
-          border: "1px solid #1f2d42",
+          background: "rgba(18, 24, 38, 0.95)",
+          border: "1px solid #26354d",
           borderRadius: "12px",
           padding: "32px",
           boxShadow: "0 20px 40px rgba(0, 0, 0, 0.6)",
@@ -341,7 +341,7 @@ export const App: React.FC = () => {
 
             <button
               type="submit"
-              className="btn btn-primary"
+              className="btn"
               style={{
                 width: "100%",
                 padding: "11px",
@@ -399,9 +399,9 @@ export const App: React.FC = () => {
               display: "flex",
               alignItems: "center",
               gap: "8px",
-              background: "#101827",
-              border: "1px solid #1f2d42",
-              padding: "6px 12px",
+              background: "#121826",
+              border: "1px solid #26354d",
+              padding: "5px 12px",
               borderRadius: "20px",
               fontSize: "12px"
             }}>
@@ -452,201 +452,187 @@ export const App: React.FC = () => {
       </section>
 
       <main className="main-content">
-        {/* Device Fleet View */}
-        <section className="dashboard-card">
-          <div className="card-header">
-            <h3>Registered Fleet Units</h3>
-            <span style={{ fontSize: "12px", color: "#8fa0b5" }}>{devices.length} Active Node(s)</span>
+        {/* Left Column: Operational Incidents */}
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">🚨 Operational Incidents ({incidents.length})</h2>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <span className="badge badge-critical">{criticalIncidents.length} Critical</span>
+              <span className="badge badge-warning">{activeIncidents.length - criticalIncidents.length} Warning</span>
+            </div>
           </div>
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Device ID</th>
-                  <th>Device Name</th>
-                  <th>Location</th>
-                  <th>Status</th>
-                  <th>Last Telemetry Seen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.map((d) => (
-                  <tr key={d.id}>
-                    <td><code>{d.id}</code></td>
-                    <td>{d.name}</td>
-                    <td style={{ color: "#8fa0b5" }}>{d.location || "N/A"}</td>
-                    <td>
-                      <span className={"badge " + (d.is_enabled ? "badge-success" : "badge-secondary")}>
-                        {d.is_enabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: "11px", color: "#8fa0b5" }}>
-                      {d.latest_report_time ? new Date(d.latest_report_time).toLocaleTimeString() : "Never"}
-                    </td>
-                  </tr>
-                ))}
-                {devices.length === 0 && (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: "center", color: "#8fa0b5" }}>No devices registered yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
 
-        {/* Live Active Incidents */}
-        <section className="dashboard-card">
-          <div className="card-header">
-            <h3>Active Incident Queue</h3>
-            <span style={{ fontSize: "12px", color: "#8fa0b5" }}>{activeIncidents.length} Unresolved</span>
-          </div>
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Severity</th>
-                  <th>Status</th>
-                  <th>Device</th>
-                  <th>Title</th>
-                  <th>Events</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeIncidents.map((inc) => (
-                  <tr key={inc.id}>
-                    <td>#{inc.id}</td>
-                    <td>
-                      <span className={"badge badge-" + inc.severity}>{inc.severity}</span>
-                    </td>
-                    <td>
-                      <span className={"badge " + (inc.status === "open" ? "badge-warning" : "badge-info")}>
-                        {inc.status}
+          <div className="panel-body">
+            {incidents.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "30px", color: "#8fa0b5" }}>
+                No incidents reported. All systems nominal.
+              </div>
+            ) : (
+              <div className="list-container">
+                {incidents.map((inc) => (
+                  <div key={inc.id} className="incident-row" style={{ cursor: "pointer" }} onClick={() => handleInspectIncident(inc.id)}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span className={"badge badge-" + inc.severity}>{inc.severity}</span>
+                        <span className={"badge badge-" + inc.status}>{inc.status}</span>
+                        <span style={{ fontWeight: 600 }}>#{inc.id} {inc.title}</span>
+                      </div>
+                      <span style={{ fontSize: "11px", color: "#8fa0b5" }}>
+                        {new Date(inc.last_event_at).toLocaleTimeString()}
                       </span>
-                    </td>
-                    <td><code>{inc.device_id}</code></td>
-                    <td style={{ fontWeight: 500 }}>{inc.title}</td>
-                    <td><span className="badge badge-info">{inc.event_count}</span></td>
-                    <td>
-                      <button className="btn btn-secondary btn-sm" onClick={() => handleInspectIncident(inc.id)}>
-                        Inspect
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {activeIncidents.length === 0 && (
-                  <tr>
-                    <td colSpan={7} style={{ textAlign: "center", color: "#10b981", padding: "20px" }}>
-                      ✓ All fleet operations normal. No active incidents.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                    </div>
 
-        {/* Live Ingested Events Stream */}
-        <section className="dashboard-card full-width">
-          <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-              <h3>Live Telemetry Stream</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px" }}>
-                <label htmlFor="device-filter-select" style={{ color: "#8fa0b5" }}>Device Filter:</label>
+                    <p style={{ fontSize: "12px", color: "#cbd5e1", marginBottom: "8px" }}>{inc.summary}</p>
+
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", color: "#8fa0b5" }}>
+                      <span>Device: <strong>{inc.device_id}</strong> (Events: {inc.event_count})</span>
+                      <div style={{ display: "flex", gap: "6px" }} onClick={(e) => e.stopPropagation()}>
+                        {inc.status === "open" && (
+                          <button className="btn btn-sm" onClick={() => handleAcknowledge(inc.id)}>Acknowledge</button>
+                        )}
+                        {inc.status !== "resolved" && (
+                          <button className="btn btn-success btn-sm" onClick={() => handleResolve(inc.id)}>Resolve</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column: Fleet Devices + Live Telemetry Stream */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          <div className="panel" style={{ flex: "1" }}>
+            <div className="panel-header">
+              <h2 className="panel-title">📡 Fleet Devices ({devices.length})</h2>
+            </div>
+            <div className="panel-body" style={{ maxHeight: "200px" }}>
+              {devices.length === 0 ? (
+                <div style={{ color: "#8fa0b5", textAlign: "center", padding: "15px" }}>No devices registered.</div>
+              ) : (
+                <div className="list-container">
+                  {devices.map((d) => (
+                    <div 
+                      key={d.id} 
+                      className="device-row" 
+                      style={{ 
+                        display: "flex", 
+                        justifyContent: "space-between", 
+                        alignItems: "center",
+                        cursor: "pointer",
+                        borderLeft: selectedDeviceFilter === d.id ? "3px solid #00d2ff" : undefined
+                      }}
+                      onClick={() => setSelectedDeviceFilter(selectedDeviceFilter === d.id ? "all" : d.id)}
+                      title="Click to filter live stream by this device"
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{d.name} <span style={{ fontSize: "11px", color: "#8fa0b5" }}>({d.id})</span></div>
+                        <div style={{ fontSize: "11px", color: "#8fa0b5" }}>{d.location || "Unknown Location"}</div>
+                      </div>
+                      <div style={{ textAlign: "right", fontSize: "11px" }}>
+                        <div style={{ color: d.latest_report_time ? "#10b981" : "#f59e0b" }}>
+                          {d.latest_report_time ? "Last: " + new Date(d.latest_report_time).toLocaleTimeString() : "Never reported"}
+                        </div>
+                        <div style={{ color: "#8fa0b5" }}>{d.is_enabled ? "Enabled" : "Disabled"}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="panel" style={{ flex: "1.2" }}>
+            <div className="panel-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <h2 className="panel-title">⚡ Live Ingestion Stream (SSE)</h2>
+                <span style={{ fontSize: "11px", color: "#8fa0b5" }}>({filteredEvents.length})</span>
+              </div>
+              
+              {/* Device Stream Filter Dropdown */}
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <label style={{ fontSize: "11px", color: "#8fa0b5" }}>Filter:</label>
                 <select
-                  id="device-filter-select"
                   value={selectedDeviceFilter}
                   onChange={(e) => setSelectedDeviceFilter(e.target.value)}
                   style={{
                     background: "#0d1117",
-                    color: "#f0f4f8",
+                    color: "#00d2ff",
                     border: "1px solid #26354d",
                     borderRadius: "4px",
-                    padding: "4px 8px",
-                    fontSize: "12px"
+                    padding: "3px 8px",
+                    fontSize: "11px",
+                    cursor: "pointer"
                   }}
                 >
-                  <option value="all">All Devices ({devices.length})</option>
+                  <option value="all">All Devices (Fleet View)</option>
                   {devices.map((d) => (
                     <option key={d.id} value={d.id}>
-                      {d.name} ({d.id})
+                      {d.id} ({d.name})
                     </option>
                   ))}
                 </select>
               </div>
             </div>
-            <span style={{ fontSize: "12px", color: "#8fa0b5" }}>
-              Showing {filteredEvents.length} event(s)
-            </span>
+            
+            <div className="panel-body" style={{ maxHeight: "250px" }}>
+              {filteredEvents.length === 0 ? (
+                <div style={{ color: "#8fa0b5", textAlign: "center", padding: "20px" }}>
+                  {selectedDeviceFilter === "all" ? "Waiting for telemetry..." : "No telemetry received for this device yet."}
+                </div>
+              ) : (
+                <div className="list-container">
+                  {filteredEvents.slice(0, 15).map((evt) => (
+                    <div key={evt.device_id + "-" + evt.event_id} className="event-row">
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
+                        <span>
+                          <strong style={{ color: "#00d2ff" }}>{evt.device_id}</strong> / {evt.event_type}
+                        </span>
+                        <span style={{ color: "#8fa0b5", fontSize: "11px" }}>
+                          {new Date(evt.event_time).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#cbd5e1", marginTop: "4px" }}>
+                        Payload: {JSON.stringify(evt.payload)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="table-wrapper" style={{ maxHeight: "320px", overflowY: "auto" }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Device ID</th>
-                  <th>Event Type</th>
-                  <th>Payload Data</th>
-                  <th>Worker Ingest Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredEvents.map((evt) => (
-                  <tr key={evt.id || evt.event_id}>
-                    <td style={{ fontSize: "11px", color: "#8fa0b5" }}>
-                      {new Date(evt.event_time).toLocaleTimeString()}
-                    </td>
-                    <td><code>{evt.device_id}</code></td>
-                    <td><span className="badge badge-info">{evt.event_type}</span></td>
-                    <td style={{ fontFamily: "monospace", fontSize: "11px", color: "#94a3b8" }}>
-                      {JSON.stringify(evt.payload)}
-                    </td>
-                    <td>
-                      <span className={"badge " + (evt.processing_status === "processed" ? "badge-success" : "badge-secondary")}>
-                        {evt.processing_status || "queued"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {filteredEvents.length === 0 && (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: "center", color: "#8fa0b5" }}>
-                      {selectedDeviceFilter === "all" ? "Awaiting telemetry signals..." : "No events recorded for selected device."}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        </div>
       </main>
 
       {/* Incident Deep Inspection Modal */}
       {selectedIncident && (
-        <div className="modal-backdrop" onClick={() => setSelectedIncident(null)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => setSelectedIncident(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <div>
-                <h3 style={{ margin: 0 }}>Incident #{selectedIncident.id}: {selectedIncident.title}</h3>
-                <div style={{ fontSize: "12px", color: "#8fa0b5", marginTop: "4px" }}>
-                  Device: <code>{selectedIncident.device_id}</code> &bull; Severity: <span className={"badge badge-" + selectedIncident.severity}>{selectedIncident.severity}</span> &bull; Status: <span className="badge badge-warning">{selectedIncident.status}</span>
-                </div>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <span className={"badge badge-" + selectedIncident.severity}>{selectedIncident.severity}</span>
+                <span className={"badge badge-" + selectedIncident.status}>{selectedIncident.status}</span>
+                <h3 style={{ fontSize: "16px" }}>Incident #{selectedIncident.id}</h3>
               </div>
-              <button className="btn btn-secondary btn-sm" onClick={() => setSelectedIncident(null)}>X</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setSelectedIncident(null)}>✕</button>
             </div>
 
             <div className="modal-body">
-              <p style={{ marginTop: 0, fontSize: "13px", color: "#f0f4f8" }}>
-                <strong>Summary:</strong> {selectedIncident.summary}
-              </p>
+              <h4 style={{ marginBottom: "8px" }}>{selectedIncident.title}</h4>
+              <p style={{ color: "#cbd5e1", marginBottom: "16px" }}>{selectedIncident.summary}</p>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", margin: "14px 0", fontSize: "12px" }}>
-                <div><strong>Opened:</strong> {new Date(selectedIncident.opened_at).toLocaleString()}</div>
-                <div><strong>Last Event:</strong> {new Date(selectedIncident.last_event_at).toLocaleString()}</div>
-                <div><strong>Acknowledged:</strong> {selectedIncident.acknowledged_at ? new Date(selectedIncident.acknowledged_at).toLocaleString() : "Pending"}</div>
-                <div><strong>Resolved:</strong> {selectedIncident.resolved_at ? new Date(selectedIncident.resolved_at).toLocaleString() : "No"}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", fontSize: "12px", marginBottom: "16px" }}>
+                <div><strong>Device:</strong> {selectedIncident.device_id}</div>
+                <div><strong>Opened At:</strong> {new Date(selectedIncident.opened_at).toLocaleString()}</div>
+                <div><strong>Last Occurrence:</strong> {new Date(selectedIncident.last_event_at).toLocaleString()}</div>
+                <div><strong>Event Count:</strong> {selectedIncident.event_count}</div>
+                {selectedIncident.resolution_note && (
+                  <div style={{ gridColumn: "span 2", color: "#10b981" }}>
+                    <strong>Resolution:</strong> {selectedIncident.resolution_note}
+                  </div>
+                )}
               </div>
 
               <h4 style={{ fontSize: "13px", marginBottom: "8px" }}>Triggering & Associated Events ({selectedIncident.events ? selectedIncident.events.length : 0})</h4>
