@@ -1,0 +1,400 @@
+import React, { useState, useEffect } from "react";
+import type { Device, TelemetryEvent, Incident, IncidentDetail } from "./types";
+
+const API_BASE = "http://localhost:8000/api";
+
+export const App: React.FC = () => {
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [events, setEvents] = useState<TelemetryEvent[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [selectedIncident, setSelectedIncident] = useState<IncidentDetail | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<"connected" | "reconnecting" | "offline">("offline");
+  const [resolutionNote, setResolutionNote] = useState<string>("");
+
+  const fetchAllState = async () => {
+    try {
+      const [devRes, incRes, evtRes] = await Promise.all([
+        fetch(API_BASE + "/devices"),
+        fetch(API_BASE + "/incidents"),
+        fetch(API_BASE + "/events?limit=50")
+      ]);
+
+      if (devRes.ok) setDevices(await devRes.json());
+      if (incRes.ok) setIncidents(await incRes.json());
+      if (evtRes.ok) setEvents(await evtRes.json());
+    } catch (err) {
+      console.error("Failed to fetch platform state:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchAllState();
+
+    let eventSource: EventSource | null = null;
+    let reconnectTimeout: any = null;
+
+    const connectSSE = () => {
+      setConnectionStatus("reconnecting");
+      eventSource = new EventSource(API_BASE + "/events/stream");
+
+      eventSource.onopen = () => {
+        setConnectionStatus("connected");
+        fetchAllState();
+      };
+
+      eventSource.addEventListener("event_received", (e) => {
+        try {
+          const newEvent: TelemetryEvent = JSON.parse(e.data);
+          setEvents((prev) => [newEvent, ...prev.slice(0, 49)]);
+          setDevices((prev) =>
+            prev.map((d) =>
+              d.id === newEvent.device_id
+                ? { ...d, latest_report_time: newEvent.event_time, server_last_received_at: newEvent.received_at }
+                : d
+            )
+          );
+        } catch (err) {
+          console.error("Failed to parse SSE event_received:", err);
+        }
+      });
+
+      eventSource.addEventListener("incident_created", (e) => {
+        try {
+          const inc: Incident = JSON.parse(e.data);
+          setIncidents((prev) => [inc, ...prev.filter((i) => i.id !== inc.id)]);
+        } catch (err) {
+          console.error("Failed to parse SSE incident_created:", err);
+        }
+      });
+
+      eventSource.addEventListener("incident_updated", (e) => {
+        try {
+          const updated: Incident = JSON.parse(e.data);
+          setIncidents((prev) =>
+            prev.map((i) => (i.id === updated.id ? { ...i, ...updated } : i))
+          );
+        } catch (err) {
+          console.error("Failed to parse SSE incident_updated:", err);
+        }
+      });
+
+      eventSource.addEventListener("incident_acknowledged", (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setIncidents((prev) =>
+            prev.map((i) =>
+              i.id === data.id ? { ...i, status: "acknowledged", acknowledged_at: data.acknowledged_at } : i
+            )
+          );
+        } catch (err) {}
+      });
+
+      eventSource.addEventListener("incident_resolved", (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          setIncidents((prev) =>
+            prev.map((i) =>
+              i.id === data.id ? { ...i, status: "resolved", resolved_at: data.resolved_at, resolution_note: data.resolution_note } : i
+            )
+          );
+        } catch (err) {}
+      });
+
+      eventSource.onerror = () => {
+        setConnectionStatus("reconnecting");
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        reconnectTimeout = setTimeout(connectSSE, 3000);
+      };
+    };
+
+    connectSSE();
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    };
+  }, []);
+
+  const handleInspectIncident = async (id: number) => {
+    try {
+      const res = await fetch(API_BASE + "/incidents/" + id);
+      if (res.ok) {
+        setSelectedIncident(await res.json());
+      }
+    } catch (err) {
+      console.error("Failed to inspect incident:", err);
+    }
+  };
+
+  const handleAcknowledge = async (id: number) => {
+    try {
+      const res = await fetch(API_BASE + "/incidents/" + id + "/acknowledge", { method: "POST" });
+      if (res.ok) {
+        const updated = await res.json();
+        setIncidents((prev) => prev.map((i) => (i.id === id ? updated : i)));
+        if (selectedIncident && selectedIncident.id === id) {
+          setSelectedIncident((prev) => (prev ? { ...prev, ...updated } : null));
+        }
+      }
+    } catch (err) {
+      console.error("Error acknowledging incident:", err);
+    }
+  };
+
+  const handleResolve = async (id: number) => {
+    try {
+      const res = await fetch(API_BASE + "/incidents/" + id + "/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution_note: resolutionNote || "Resolved by operator" })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setIncidents((prev) => prev.map((i) => (i.id === id ? updated : i)));
+        if (selectedIncident && selectedIncident.id === id) {
+          setSelectedIncident((prev) => (prev ? { ...prev, ...updated } : null));
+        }
+        setResolutionNote("");
+      }
+    } catch (err) {
+      console.error("Error resolving incident:", err);
+    }
+  };
+
+  const activeIncidents = incidents.filter((i) => i.status !== "resolved");
+  const criticalIncidents = incidents.filter((i) => i.status !== "resolved" && i.severity === "critical");
+
+  return (
+    <div className="dashboard-container">
+      <header className="top-header">
+        <div className="brand-section">
+          <span style={{ fontSize: "20px" }}>ðŸ›°ï¸</span>
+          <div>
+            <h1 className="brand-title">FLEET OPERATIONS CONSOLE</h1>
+            <div style={{ fontSize: "11px", color: "#8fa0b5" }}>Real-time Edge Telemetry & Incident Intelligence</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <div className={"connection-badge conn-" + connectionStatus}>
+            <span className="pulse-dot"></span>
+            {connectionStatus === "connected" ? "LIVE (SSE)" : connectionStatus === "reconnecting" ? "RECONNECTING..." : "OFFLINE"}
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={fetchAllState}>
+            Refresh REST
+          </button>
+        </div>
+      </header>
+
+      <section className="stats-ribbon">
+        <div className="stat-card">
+          <div className="stat-label">Registered Devices</div>
+          <div className="stat-value" style={{ color: "#00d2ff" }}>{devices.length}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Active Incidents</div>
+          <div className="stat-value" style={{ color: activeIncidents.length > 0 ? "#f59e0b" : "#10b981" }}>
+            {activeIncidents.length}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Critical Alerts</div>
+          <div className="stat-value" style={{ color: criticalIncidents.length > 0 ? "#ef4444" : "#8fa0b5" }}>
+            {criticalIncidents.length}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Telemetry Events (Cached)</div>
+          <div className="stat-value" style={{ color: "#f0f4f8" }}>{events.length}</div>
+        </div>
+      </section>
+
+      <main className="main-content">
+        <div className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">ðŸš¨ Operational Incidents ({incidents.length})</h2>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <span className="badge badge-critical">{criticalIncidents.length} Critical</span>
+              <span className="badge badge-warning">{activeIncidents.length - criticalIncidents.length} Warning</span>
+            </div>
+          </div>
+
+          <div className="panel-body">
+            {incidents.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "30px", color: "#8fa0b5" }}>
+                No incidents reported. All systems nominal.
+              </div>
+            ) : (
+              <div className="list-container">
+                {incidents.map((inc) => (
+                  <div key={inc.id} className="incident-row" style={{ cursor: "pointer" }} onClick={() => handleInspectIncident(inc.id)}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span className={"badge badge-" + inc.severity}>{inc.severity}</span>
+                        <span className={"badge badge-" + inc.status}>{inc.status}</span>
+                        <span style={{ fontWeight: 600 }}>#{inc.id} {inc.title}</span>
+                      </div>
+                      <span style={{ fontSize: "11px", color: "#8fa0b5" }}>
+                        {new Date(inc.last_event_at).toLocaleTimeString()}
+                      </span>
+                    </div>
+
+                    <p style={{ fontSize: "12px", color: "#cbd5e1", marginBottom: "8px" }}>{inc.summary}</p>
+
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", color: "#8fa0b5" }}>
+                      <span>Device: <strong>{inc.device_id}</strong> (Events: {inc.event_count})</span>
+                      <div style={{ display: "flex", gap: "6px" }} onClick={(e) => e.stopPropagation()}>
+                        {inc.status === "open" && (
+                          <button className="btn btn-sm" onClick={() => handleAcknowledge(inc.id)}>Acknowledge</button>
+                        )}
+                        {inc.status !== "resolved" && (
+                          <button className="btn btn-success btn-sm" onClick={() => handleResolve(inc.id)}>Resolve</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          <div className="panel" style={{ flex: "1" }}>
+            <div className="panel-header">
+              <h2 className="panel-title">ðŸ“¡ Fleet Devices ({devices.length})</h2>
+            </div>
+            <div className="panel-body" style={{ maxHeight: "200px" }}>
+              {devices.length === 0 ? (
+                <div style={{ color: "#8fa0b5", textAlign: "center", padding: "15px" }}>No devices registered.</div>
+              ) : (
+                <div className="list-container">
+                  {devices.map((d) => (
+                    <div key={d.id} className="device-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{d.name} <span style={{ fontSize: "11px", color: "#8fa0b5" }}>({d.id})</span></div>
+                        <div style={{ fontSize: "11px", color: "#8fa0b5" }}>{d.location || "Unknown Location"}</div>
+                      </div>
+                      <div style={{ textAlign: "right", fontSize: "11px" }}>
+                        <div style={{ color: d.latest_report_time ? "#10b981" : "#f59e0b" }}>
+                          {d.latest_report_time ? "Last: " + new Date(d.latest_report_time).toLocaleTimeString() : "Never reported"}
+                        </div>
+                        <div style={{ color: "#8fa0b5" }}>{d.is_enabled ? "Enabled" : "Disabled"}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="panel" style={{ flex: "1.2" }}>
+            <div className="panel-header">
+              <h2 className="panel-title">âš¡ Live Ingestion Stream (SSE)</h2>
+              <span style={{ fontSize: "11px", color: "#8fa0b5" }}>Auto-updating</span>
+            </div>
+            <div className="panel-body" style={{ maxHeight: "250px" }}>
+              {events.length === 0 ? (
+                <div style={{ color: "#8fa0b5", textAlign: "center", padding: "20px" }}>Waiting for telemetry...</div>
+              ) : (
+                <div className="list-container">
+                  {events.slice(0, 15).map((evt) => (
+                    <div key={evt.device_id + "-" + evt.event_id} className="event-row">
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
+                        <span>
+                          <strong style={{ color: "#00d2ff" }}>{evt.device_id}</strong> / {evt.event_type}
+                        </span>
+                        <span style={{ color: "#8fa0b5", fontSize: "11px" }}>
+                          {new Date(evt.event_time).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#cbd5e1", marginTop: "4px" }}>
+                        Payload: {JSON.stringify(evt.payload)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {selectedIncident && (
+        <div className="modal-overlay" onClick={() => setSelectedIncident(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <span className={"badge badge-" + selectedIncident.severity}>{selectedIncident.severity}</span>
+                <span className={"badge badge-" + selectedIncident.status}>{selectedIncident.status}</span>
+                <h3 style={{ fontSize: "16px" }}>Incident #{selectedIncident.id}</h3>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={() => setSelectedIncident(null)}>âœ•</button>
+            </div>
+
+            <div className="modal-body">
+              <h4 style={{ marginBottom: "8px" }}>{selectedIncident.title}</h4>
+              <p style={{ color: "#cbd5e1", marginBottom: "16px" }}>{selectedIncident.summary}</p>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", fontSize: "12px", marginBottom: "16px" }}>
+                <div><strong>Device:</strong> {selectedIncident.device_id}</div>
+                <div><strong>Opened At:</strong> {new Date(selectedIncident.opened_at).toLocaleString()}</div>
+                <div><strong>Last Occurrence:</strong> {new Date(selectedIncident.last_event_at).toLocaleString()}</div>
+                <div><strong>Event Count:</strong> {selectedIncident.event_count}</div>
+                {selectedIncident.resolution_note && (
+                  <div style={{ gridColumn: "span 2", color: "#10b981" }}>
+                    <strong>Resolution:</strong> {selectedIncident.resolution_note}
+                  </div>
+                )}
+              </div>
+
+              <h4 style={{ fontSize: "13px", marginBottom: "8px" }}>Triggering & Associated Events ({selectedIncident.events ? selectedIncident.events.length : 0})</h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "180px", overflowY: "auto" }}>
+                {selectedIncident.events && selectedIncident.events.length > 0 ? (
+                  selectedIncident.events.map((e) => (
+                    <div key={e.event_id} style={{ background: "#0d1117", padding: "8px", borderRadius: "4px", border: "1px solid #26354d", fontSize: "11px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", color: "#00d2ff" }}>
+                        <span>{e.event_type} (ID: {e.event_id.slice(0, 8)}...)</span>
+                        <span style={{ color: "#8fa0b5" }}>{new Date(e.event_time).toLocaleTimeString()}</span>
+                      </div>
+                      <pre style={{ marginTop: "4px", fontSize: "11px" }}>{JSON.stringify(e.payload, null, 2)}</pre>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ color: "#8fa0b5", fontSize: "12px" }}>No direct events attached (e.g. periodic silence rule).</div>
+                )}
+              </div>
+
+              {selectedIncident.status !== "resolved" && (
+                <div style={{ marginTop: "16px" }}>
+                  <label style={{ fontSize: "12px", display: "block", marginBottom: "4px" }}>Resolution Note (Optional):</label>
+                  <input
+                    type="text"
+                    style={{ width: "100%", padding: "8px", background: "#0d1117", border: "1px solid #26354d", color: "#fff", borderRadius: "4px" }}
+                    placeholder="e.g. Unit recalibrated or power restored"
+                    value={resolutionNote}
+                    onChange={(e) => setResolutionNote(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              {selectedIncident.status === "open" && (
+                <button className="btn" onClick={() => handleAcknowledge(selectedIncident.id)}>Acknowledge</button>
+              )}
+              {selectedIncident.status !== "resolved" && (
+                <button className="btn btn-success" onClick={() => handleResolve(selectedIncident.id)}>Resolve Incident</button>
+              )}
+              <button className="btn btn-secondary" onClick={() => setSelectedIncident(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+export default App;

@@ -1,0 +1,60 @@
+﻿services:
+  db:
+    image: postgres:16-alpine
+    container_name: fleet_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: \
+      POSTGRES_PASSWORD: \
+      POSTGRES_DB: \
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \ -d \"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_backend
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: \
+      POSTGRES_PASSWORD: \
+      POSTGRES_DB: \
+      ENVIRONMENT: production
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fleet_worker
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: \
+      POSTGRES_PASSWORD: \
+      POSTGRES_DB: \
+      ENVIRONMENT: production
+    command: python -m app.worker.processor
+
+volumes:
+  postgres_data:
