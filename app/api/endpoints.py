@@ -211,6 +211,7 @@ async def register_device(
         name=payload.name,
         location=payload.location,
         is_enabled=payload.is_enabled,
+        api_token=None,
     )
     db.add(device)
     await db.commit()
@@ -353,6 +354,15 @@ async def claim_pairing_code(
 
     pairing.is_used = True
     await db.commit()
+
+    # Automatically save device credentials file so container or local simulator can boot immediately
+    try:
+        import json, os
+        creds_path = f".device_{device.id}_creds.json"
+        with open(creds_path, "w", encoding="utf-8") as f:
+            json.dump({"device_id": device.id, "api_token": device_token}, f)
+    except Exception as e:
+        pass
 
     return PairDeviceClaimResponse(
         device_id=device.id,

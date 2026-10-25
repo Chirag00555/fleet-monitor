@@ -34,10 +34,13 @@ class DeviceSimulator:
         pairing_code: Optional[str] = None,
         api_token: Optional[str] = None
     ):
-        self.pairing_code = pairing_code
-        self.api_token = api_token
         self.base_url = base_url.rstrip("/")
         self.device_id = device_id
+        import os
+        base_dir = "/app/credentials" if os.path.isdir("/app/credentials") else "."
+        self.credentials_file = os.path.join(base_dir, f".device_{device_id}_creds.json")
+        self.pairing_code = pairing_code
+        self.api_token = api_token or self._load_saved_token()
         self.device_name = device_name
         self.location = location
         self.interval = interval
@@ -52,6 +55,33 @@ class DeviceSimulator:
         self.is_disconnected = False
 
 
+
+    def _load_saved_token(self) -> Optional[str]:
+        """Load previously paired and persisted API token from local disk."""
+        import json
+        import os
+        if os.path.exists(self.credentials_file):
+            try:
+                with open(self.credentials_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    tok = data.get("api_token")
+                    if tok:
+                        logger.info(f"Loaded persistent API token for {self.device_id} from {self.credentials_file}")
+                        return tok
+            except Exception as e:
+                logger.warning(f"Could not read credentials file {self.credentials_file}: {e}")
+        return None
+
+    def _save_token(self, token: str):
+        """Persist paired API token locally so device remains connected across restarts."""
+        import json
+        try:
+            with open(self.credentials_file, "w", encoding="utf-8") as f:
+                json.dump({"device_id": self.device_id, "api_token": token}, f)
+            logger.info(f"Persisted API token to {self.credentials_file}")
+        except Exception as e:
+            logger.warning(f"Failed to persist credentials: {e}")
+
     def claim_pairing_code(self) -> bool:
         """Claim pairing code and save assigned API token."""
         if not self.pairing_code:
@@ -63,6 +93,7 @@ class DeviceSimulator:
                 data = resp.json()
                 self.api_token = data.get("api_token")
                 self.device_id = data.get("device_id", self.device_id)
+                self._save_token(self.api_token)
                 logger.info(f"Successfully claimed pairing code. Assigned token: {self.api_token[:12]}... for {self.device_id}")
                 return True
             else:
@@ -73,31 +104,18 @@ class DeviceSimulator:
             return False
 
     def register_device(self) -> bool:
-        """Register device with backend if not already registered."""
-        if self.pairing_code and not self.api_token:
-            if self.claim_pairing_code():
-                return True
-        url = f"{self.base_url}/api/devices"
-        payload = {
-            "id": self.device_id,
-            "name": self.device_name,
-            "location": self.location,
-            "is_enabled": True
-        }
-        try:
-            resp = self.client.post(url, json=payload)
-            if resp.status_code in (200, 201):
-                logger.info(f"Registered device '{self.device_id}' successfully.")
-                return True
-            elif resp.status_code == 409:
-                logger.info(f"Device '{self.device_id}' already registered.")
-                return True
-            else:
-                logger.warning(f"Device registration response: {resp.status_code} - {resp.text}")
-                return False
-        except Exception as e:
-            logger.error(f"Failed to connect to backend during registration: {e}")
-            return False
+        """Ensure device has a valid API token before transmitting telemetry."""
+        if self.api_token:
+            return True
+
+        if self.pairing_code:
+            return self.claim_pairing_code()
+
+        logger.warning(
+            f"Device '{self.device_id}' is NOT paired. No API token found.\n"
+            f"Please generate a Pairing Code in the Operator Console and pass --pairing-code <CODE>."
+        )
+        return False
 
     def generate_event(self) -> Dict[str, Any]:
         """Generate a single telemetry event with a stable UUID."""
@@ -109,7 +127,7 @@ class DeviceSimulator:
             temp = round(random.uniform(self.spike_threshold, self.temp_max + 10.0), 2)
             event_type = "temperature"
         else:
-            temp = round(random.uniform(self.temp_min, self.spike_threshold - 1.0), 2)
+            temp = round(random.uniform(75.0, 84.9), 2) if random.random() < 0.45 else round(random.uniform(self.temp_min, 74.0), 2)
             event_type = "temperature" if random.random() < 0.8 else "heartbeat"
 
         payload: Dict[str, Any] = {
@@ -184,7 +202,11 @@ class DeviceSimulator:
         resend_duplicate: bool = True
     ):
         """Run complete demonstration loop."""
-        self.register_device()
+        is_ready = self.register_device()
+        if not is_ready and not self.api_token:
+            logger.error(f"Aborting telemetry loop: Device '{self.device_id}' has not been paired by an operator.")
+            return
+
         start_time = time.time()
         step = 0
         last_sent_event: Optional[Dict[str, Any]] = None
