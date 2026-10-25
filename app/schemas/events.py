@@ -42,6 +42,12 @@ class DeviceRegistrationRequest(BaseModel):
     is_enabled: bool = True
 
 
+class DeviceUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    location: Optional[str] = Field(None, max_length=256)
+    is_enabled: Optional[bool] = None
+
+
 class DeviceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

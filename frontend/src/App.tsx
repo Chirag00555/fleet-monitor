@@ -12,6 +12,15 @@ export const App: React.FC = () => {
   const [passwordInput, setPasswordInput] = useState<string>("admin123");
   const [authError, setAuthError] = useState<string>("");
 
+  // Navigation section state ('operations' | 'devices')
+  const [activeTab, setActiveTab] = useState<"operations" | "devices">("operations");
+  const [deviceActionLoading, setDeviceActionLoading] = useState<string | null>(null);
+  const [showAddDeviceModal, setShowAddDeviceModal] = useState<boolean>(false);
+  const [newDeviceId, setNewDeviceId] = useState<string>("");
+  const [newDeviceName, setNewDeviceName] = useState<string>("");
+  const [newDeviceLocation, setNewDeviceLocation] = useState<string>("");
+  const [addDeviceError, setAddDeviceError] = useState<string>("");
+
   // Dashboard state
   const [devices, setDevices] = useState<Device[]>([]);
   const [events, setEvents] = useState<TelemetryEvent[]>([]);
@@ -238,6 +247,83 @@ export const App: React.FC = () => {
     }
   };
 
+  // Device management handlers (Stage 2)
+  const handleToggleDeviceStatus = async (deviceId: string, currentStatus: boolean) => {
+    setDeviceActionLoading(deviceId);
+    try {
+      const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_enabled: !currentStatus })
+      });
+      if (res.ok) {
+        const updatedDev: Device = await res.json();
+        setDevices((prev) => prev.map((d) => (d.id === deviceId ? updatedDev : d)));
+      } else {
+        alert(`Failed to update device status for ${deviceId}`);
+      }
+    } catch (err) {
+      console.error("Failed to toggle device status:", err);
+    } finally {
+      setDeviceActionLoading(null);
+    }
+  };
+
+  const handleRevokeDevice = async (deviceId: string) => {
+    if (!window.confirm(`Are you sure you want to revoke device ${deviceId}?`)) {
+      return;
+    }
+    setDeviceActionLoading(deviceId);
+    try {
+      const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
+        method: "DELETE"
+      });
+      if (res.ok || res.status === 204) {
+        setDevices((prev) => prev.filter((d) => d.id !== deviceId));
+        if (selectedDeviceFilter === deviceId) {
+          setSelectedDeviceFilter("all");
+        }
+      } else {
+        alert(`Failed to revoke device ${deviceId}`);
+      }
+    } catch (err) {
+      console.error("Failed to revoke device:", err);
+    } finally {
+      setDeviceActionLoading(null);
+    }
+  };
+
+  const handleRegisterDevice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddDeviceError("");
+    try {
+      const res = await fetch(`${API_BASE}/devices`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: newDeviceId.trim(),
+          name: newDeviceName.trim(),
+          location: newDeviceLocation.trim() || undefined,
+          is_enabled: true
+        })
+      });
+      if (res.ok) {
+        const created: Device = await res.json();
+        setDevices((prev) => [...prev, created]);
+        setNewDeviceId("");
+        setNewDeviceName("");
+        setNewDeviceLocation("");
+        setShowAddDeviceModal(false);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setAddDeviceError(err.detail || "Failed to register device");
+      }
+    } catch (err) {
+      setAddDeviceError("Network error while registering device");
+    }
+  };
+
+
   // If initial auth token check is in flight
   if (authLoading) {
     return (
@@ -393,6 +479,22 @@ export const App: React.FC = () => {
           </div>
         </div>
 
+        {/* Section Navigation Tabs (Stage 2) */}
+        <div className="nav-tabs">
+          <button
+            className={`nav-tab-btn ${activeTab === "operations" ? "active" : ""}`}
+            onClick={() => setActiveTab("operations")}
+          >
+            <span>🚨</span> Operations Console
+          </button>
+          <button
+            className={`nav-tab-btn ${activeTab === "devices" ? "active" : ""}`}
+            onClick={() => setActiveTab("devices")}
+          >
+            <span>📡</span> Paired Devices ({devices.length})
+          </button>
+        </div>
+
         <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
           {operator && (
             <div style={{
@@ -451,7 +553,9 @@ export const App: React.FC = () => {
         </div>
       </section>
 
-      <main className="main-content">
+      {/* VIEW 1: Operations Console */}
+      {activeTab === "operations" && (
+        <main className="main-content">
         {/* Left Column: Operational Incidents */}
         <div className="panel">
           <div className="panel-header">
@@ -506,7 +610,14 @@ export const App: React.FC = () => {
         <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
           <div className="panel" style={{ flex: "1" }}>
             <div className="panel-header">
-              <h2 className="panel-title">📡 Fleet Devices ({devices.length})</h2>
+              <h2 className="panel-title">📡 Active Fleet Units ({devices.length})</h2>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setActiveTab("devices")}
+                  style={{ fontSize: "11px", color: "#00d2ff" }}
+                >
+                  Manage Devices →
+                </button>
             </div>
             <div className="panel-body" style={{ maxHeight: "200px" }}>
               {devices.length === 0 ? (
@@ -605,6 +716,94 @@ export const App: React.FC = () => {
           </div>
         </div>
       </main>
+      )}
+
+      {/* VIEW 2: Paired Devices Management Section (Stage 2) */}
+      {activeTab === "devices" && (
+        <main className="main-content" style={{ gridTemplateColumns: "1fr" }}>
+          <div className="panel">
+            <div className="panel-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h2 className="panel-title">📡 Paired Edge Devices ({devices.length})</h2>
+                <div style={{ fontSize: "12px", color: "#8fa0b5", marginTop: "2px" }}>
+                  Manage registered fleet hardware, toggle telemetry ingestion permissions, or revoke devices
+                </div>
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setAddDeviceError("");
+                  setShowAddDeviceModal(true);
+                }}
+                style={{ display: "flex", alignItems: "center", gap: "6px" }}
+              >
+                <span>➕</span> Pair / Register Device
+              </button>
+            </div>
+
+            <div className="panel-body" style={{ maxHeight: "650px" }}>
+              <div className="list-container">
+                {devices.map((d) => (
+                  <div
+                    key={d.id}
+                    className="device-row"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "16px",
+                      opacity: d.is_enabled ? 1 : 0.65
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+                        <span style={{ fontSize: "16px", fontWeight: 700, color: "#f0f4f8" }}>{d.name}</span>
+                        <code style={{ background: "#0d1117", padding: "2px 6px", borderRadius: "4px", fontSize: "12px", color: "#00d2ff" }}>
+                          {d.id}
+                        </code>
+                        <span className={`badge ${d.is_enabled ? "badge-resolved" : "badge-critical"}`}>
+                          {d.is_enabled ? "Active / Ingestion Allowed" : "Disabled / Blocked"}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#8fa0b5" }}>
+                        Location: <span style={{ color: "#cbd5e1" }}>{d.location || "N/A"}</span> &bull; 
+                        Registered: {new Date(d.created_at).toLocaleDateString()} &bull; 
+                        Last Telemetry: <span style={{ color: d.latest_report_time ? "#10b981" : "#f59e0b" }}>
+                          {d.latest_report_time ? new Date(d.latest_report_time).toLocaleString() : "Never reported"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <button
+                        className={`btn ${d.is_enabled ? "btn-secondary" : "btn-success"} btn-sm`}
+                        disabled={deviceActionLoading === d.id}
+                        onClick={() => handleToggleDeviceStatus(d.id, d.is_enabled)}
+                      >
+                        {deviceActionLoading === d.id ? "Updating..." : d.is_enabled ? "Disable Ingestion" : "Enable Ingestion"}
+                      </button>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        disabled={deviceActionLoading === d.id}
+                        onClick={() => handleRevokeDevice(d.id)}
+                        title="Revoke device registration"
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {devices.length === 0 && (
+                  <div style={{ textAlign: "center", padding: "40px", color: "#8fa0b5" }}>
+                    No edge devices currently paired. Click "+ Pair / Register Device" above to add one.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </main>
+      )}
 
       {/* Incident Deep Inspection Modal */}
       {selectedIncident && (
@@ -675,6 +874,101 @@ export const App: React.FC = () => {
               )}
               <button className="btn btn-secondary" onClick={() => setSelectedIncident(null)}>Close</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Device Modal (Stage 2) */}
+      {showAddDeviceModal && (
+        <div className="modal-overlay" onClick={() => setShowAddDeviceModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "460px" }}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: "16px" }}>Pair New Edge Device</h3>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowAddDeviceModal(false)}>✕</button>
+            </div>
+            <form onSubmit={handleRegisterDevice}>
+              <div className="modal-body">
+                {addDeviceError && (
+                  <div style={{
+                    background: "rgba(239, 68, 68, 0.15)",
+                    border: "1px solid rgba(239, 68, 68, 0.4)",
+                    color: "#fca5a5",
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    fontSize: "12px",
+                    marginBottom: "16px"
+                  }}>
+                    ⚠️ {addDeviceError}
+                  </div>
+                )}
+                <div style={{ marginBottom: "14px" }}>
+                  <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
+                    Device Identifier (e.g. device-04-pump)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newDeviceId}
+                    onChange={(e) => setNewDeviceId(e.target.value)}
+                    placeholder="device-04-pump"
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      background: "#0d131f",
+                      border: "1px solid #223249",
+                      borderRadius: "6px",
+                      color: "#fff",
+                      fontSize: "13px"
+                    }}
+                  />
+                </div>
+                <div style={{ marginBottom: "14px" }}>
+                  <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
+                    Display Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newDeviceName}
+                    onChange={(e) => setNewDeviceName(e.target.value)}
+                    placeholder="Hydraulic Pressure Pump 4"
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      background: "#0d131f",
+                      border: "1px solid #223249",
+                      borderRadius: "6px",
+                      color: "#fff",
+                      fontSize: "13px"
+                    }}
+                  />
+                </div>
+                <div style={{ marginBottom: "14px" }}>
+                  <label style={{ display: "block", fontSize: "12px", color: "#8fa0b5", marginBottom: "6px" }}>
+                    Location (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newDeviceLocation}
+                    onChange={(e) => setNewDeviceLocation(e.target.value)}
+                    placeholder="Facility Sector C - North Wing"
+                    style={{
+                      width: "100%",
+                      padding: "8px 12px",
+                      background: "#0d131f",
+                      border: "1px solid #223249",
+                      borderRadius: "6px",
+                      color: "#fff",
+                      fontSize: "13px"
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="submit" className="btn btn-primary">Pair Device</button>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowAddDeviceModal(false)}>Cancel</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

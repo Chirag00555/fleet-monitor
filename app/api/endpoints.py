@@ -1,4 +1,4 @@
-import json
+﻿import json
 import asyncio
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -18,6 +18,7 @@ from app.schemas.events import (
     BatchIngestResponse,
     DeviceRegistrationRequest,
     DeviceResponse,
+    DeviceUpdateRequest,
 )
 from app.schemas.rules_incidents import (
     RuleCreateRequest,
@@ -202,6 +203,51 @@ async def register_device(
 async def list_devices(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Device).order_by(Device.name))
     return result.scalars().all()
+
+
+@router.patch(
+    "/devices/{device_id}",
+    response_model=DeviceResponse,
+    summary="Update device configuration or enable/disable state"
+)
+async def update_device(
+    device_id: str,
+    payload: DeviceUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    device = await db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Device '{device_id}' not found.")
+
+    if payload.name is not None:
+        device.name = payload.name
+    if payload.location is not None:
+        device.location = payload.location
+    if payload.is_enabled is not None:
+        device.is_enabled = payload.is_enabled
+
+    device.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(device)
+    return device
+
+
+@router.delete(
+    "/devices/{device_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke and delete a device registration"
+)
+async def delete_device(
+    device_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    device = await db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Device '{device_id}' not found.")
+
+    await db.delete(device)
+    await db.commit()
+    return None
 
 
 # ----------------- RULES MANAGEMENT -----------------
@@ -458,3 +504,4 @@ async def login(credentials: LoginRequest, db: AsyncSession = Depends(get_db)):
 )
 async def get_me(current_operator: Operator = Depends(get_current_operator)):
     return OperatorResponse.model_validate(current_operator)
+
